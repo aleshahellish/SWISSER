@@ -1,76 +1,368 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import json, ssl, time, urllib.error, urllib.parse, urllib.request
+
+import json
+import ssl
+import time
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
-BASE='https://api.mexc.com'; SYMBOL='TAO_USDT'; COUNT=300; N=12; WICK=40
-TFS={'15m':('Min15',900),'1h':('Min60',3600)}
 
-def req(path, params=None):
-    url=BASE+path+('?' + urllib.parse.urlencode(params) if params else '')
-    r=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 TAO-MEXC-Vercel/1.0','Accept':'application/json'})
+BASE = "https://api.mexc.com"
+COUNT = 300
+N = 12
+WICK = 40
+
+TFS = {
+    "15m": ("Min15", 900),
+    "1h": ("Min60", 3600),
+}
+
+SUPPORTED_SYMBOLS = {
+    "TAO_USDT",
+    "HYPE_USDT",
+    "XRP_USDT",
+    "SOL_USDT",
+    "DOGE_USDT",
+    "ETH_USDT",
+    "BTC_USDT",
+}
+
+
+def normalize_symbol(value: str | None) -> str:
+    """Приводит TAO, tao_usdt, SOLUSDT и похожие записи к формату MEXC."""
+    symbol = (value or "TAO_USDT").strip().upper()
+    symbol = symbol.replace("-", "_").replace("/", "_")
+
+    if symbol.endswith("USDT") and not symbol.endswith("_USDT"):
+        symbol = symbol[:-4] + "_USDT"
+
+    if "_" not in symbol:
+        symbol = symbol + "_USDT"
+
+    if symbol not in SUPPORTED_SYMBOLS:
+        allowed = ", ".join(sorted(SUPPORTED_SYMBOLS))
+        raise ValueError(
+            f"Unsupported symbol: {symbol}. Supported symbols: {allowed}"
+        )
+
+    return symbol
+
+
+def req(path: str, params: dict | None = None):
+    query = "?" + urllib.parse.urlencode(params) if params else ""
+    url = BASE + path + query
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 MEXC-Live-Analyst/1.0",
+            "Accept": "application/json",
+        },
+    )
+
     try:
-        with urllib.request.urlopen(r,timeout=8,context=ssl.create_default_context()) as x:
-            data=json.loads(x.read().decode('utf-8'))
-    except Exception as e:
-        raise RuntimeError(f'MEXC connection error: {e!r}')
-    if not isinstance(data,dict) or data.get('success') is False:
-        raise RuntimeError(f'Bad MEXC response: {data}')
+        with urllib.request.urlopen(
+            request,
+            timeout=8,
+            context=ssl.create_default_context(),
+        ) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"MEXC connection error: {exc!r}") from exc
+
+    if not isinstance(data, dict) or data.get("success") is False:
+        raise RuntimeError(f"Bad MEXC response: {data}")
+
     return data
 
-def utc(ts): return datetime.fromtimestamp(ts,tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
-def ticker():
-    d=req('/api/v1/contract/ticker',{'symbol':SYMBOL}).get('data')
-    if isinstance(d,list):
-        d=next((x for x in d if x.get('symbol')==SYMBOL),None)
-    if not isinstance(d,dict): raise RuntimeError('Ticker unavailable')
-    return d
+def utc(timestamp: int) -> str:
+    return datetime.fromtimestamp(
+        timestamp,
+        tz=timezone.utc,
+    ).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def candles(api_tf,secs):
-    now=int(time.time()); start=now-secs*(COUNT+10)
-    d=req(f'/api/v1/contract/kline/{SYMBOL}',{'interval':api_tf,'start':start,'end':now}).get('data')
-    keys=('time','open','high','low','close','vol')
-    if not isinstance(d,dict) or any(k not in d for k in keys): raise RuntimeError('Klines unavailable')
-    m=min(len(d[k]) for k in keys); out=[]
-    for i in range(m):
-        ts=int(d['time'][i]); out.append({'time':ts,'time_utc':utc(ts),'open':float(d['open'][i]),'high':float(d['high'][i]),'low':float(d['low'][i]),'close':float(d['close'][i]),'volume':float(d['vol'][i])})
-    return sorted(out,key=lambda x:x['time'])[-COUNT:]
 
-def detect(cs):
-    c2=[]; c3=[]; bull=[False]*len(cs); bear=[False]*len(cs)
-    for i in range(1,len(cs)):
-        p,c=cs[i-1],cs[i]; w=cs[max(0,i-N+1):i+1]
-        b=(c['low']==min(x['low'] for x in w) and p['close']<p['open'] and c['low']<p['low'] and c['close']>p['low'])
-        s=(c['high']==max(x['high'] for x in w) and p['close']>p['open'] and c['high']>p['high'] and c['close']<p['high'])
-        bull[i]=b; bear[i]=s
-        if b or s:
-            rng=c['high']-c['low']; wt=.01*WICK*rng
-            big=(min(c['close'],c['open'])-c['low']>wt) if b else (c['high']-max(c['close'],c['open'])>wt)
-            c2.append({'direction':'BULLISH' if b else 'BEARISH','time':c['time'],'time_utc':c['time_utc'],'previous_direction':'BEARISH' if p['close']<p['open'] else 'BULLISH','open':c['open'],'high':c['high'],'low':c['low'],'close':c['close'],'big_wick_40_percent':big})
-        if i>=2:
-            pb=cs[i-1]
-            be=bear[i-1] and c['high']<pb['high'] and c['close']<pb['low']
-            bu=bull[i-1] and c['low']>pb['low'] and c['close']>pb['high']
-            if be or bu:
-                c3.append({'direction':'BULLISH' if bu else 'BEARISH','time':c['time'],'time_utc':c['time_utc'],'after_candle2_time_utc':pb['time_utc'],'open':c['open'],'high':c['high'],'low':c['low'],'close':c['close']})
-    return c2,c3
+def ticker(symbol: str):
+    data = req(
+        "/api/v1/contract/ticker",
+        {"symbol": symbol},
+    ).get("data")
 
-def build():
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        ft=ex.submit(ticker); fs={k:ex.submit(candles,*v) for k,v in TFS.items()}
-        t=ft.result(); raw={k:f.result() for k,f in fs.items()}
-    out={}
-    now=int(time.time())
-    for k,(_,secs) in TFS.items():
-        r=raw[k]; closed=[x for x in r if x['time']+secs<=now]; c2,c3=detect(closed)
-        out[k]={'seconds_per_candle':secs,'latest_live_candle':r[-1] if r else None,'latest_closed_candle':closed[-1] if closed else None,'recent_closed_candles':closed[-40:],'recent_candle2':c2[-20:],'recent_candle3':c3[-20:]}
-    return {'ok':True,'source':'MEXC Futures public API','symbol':SYMBOL,'fetched_at_unix':now,'fetched_at_utc':utc(now),'current_price':t.get('lastPrice'),'high_24h':t.get('high24Price'),'low_24h':t.get('lower24Price'),'settings':{'reversal_filter_enabled':True,'filter_length':N,'wick_percent':WICK},'timeframes':out}
+    if isinstance(data, list):
+        data = next(
+            (item for item in data if item.get("symbol") == symbol),
+            None,
+        )
+
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Ticker unavailable for {symbol}")
+
+    return data
+
+
+def candles(symbol: str, api_tf: str, seconds: int):
+    now = int(time.time())
+    start = now - seconds * (COUNT + 10)
+
+    data = req(
+        f"/api/v1/contract/kline/{symbol}",
+        {
+            "interval": api_tf,
+            "start": start,
+            "end": now,
+        },
+    ).get("data")
+
+    keys = ("time", "open", "high", "low", "close", "vol")
+
+    if not isinstance(data, dict) or any(key not in data for key in keys):
+        raise RuntimeError(f"Klines unavailable for {symbol} {api_tf}")
+
+    length = min(len(data[key]) for key in keys)
+    output = []
+
+    for index in range(length):
+        timestamp = int(data["time"][index])
+
+        output.append(
+            {
+                "time": timestamp,
+                "time_utc": utc(timestamp),
+                "open": float(data["open"][index]),
+                "high": float(data["high"][index]),
+                "low": float(data["low"][index]),
+                "close": float(data["close"][index]),
+                "volume": float(data["vol"][index]),
+            }
+        )
+
+    return sorted(
+        output,
+        key=lambda candle: candle["time"],
+    )[-COUNT:]
+
+
+def detect(candles_list: list[dict]):
+    candle2 = []
+    candle3 = []
+
+    bullish = [False] * len(candles_list)
+    bearish = [False] * len(candles_list)
+
+    for index in range(1, len(candles_list)):
+        previous = candles_list[index - 1]
+        current = candles_list[index]
+
+        window = candles_list[
+            max(0, index - N + 1): index + 1
+        ]
+
+        bullish_signal = (
+            current["low"] == min(item["low"] for item in window)
+            and previous["close"] < previous["open"]
+            and current["low"] < previous["low"]
+            and current["close"] > previous["low"]
+        )
+
+        bearish_signal = (
+            current["high"] == max(item["high"] for item in window)
+            and previous["close"] > previous["open"]
+            and current["high"] > previous["high"]
+            and current["close"] < previous["high"]
+        )
+
+        bullish[index] = bullish_signal
+        bearish[index] = bearish_signal
+
+        if bullish_signal or bearish_signal:
+            candle_range = current["high"] - current["low"]
+            wick_threshold = 0.01 * WICK * candle_range
+
+            if bullish_signal:
+                big_wick = (
+                    min(current["close"], current["open"])
+                    - current["low"]
+                    > wick_threshold
+                )
+            else:
+                big_wick = (
+                    current["high"]
+                    - max(current["close"], current["open"])
+                    > wick_threshold
+                )
+
+            candle2.append(
+                {
+                    "direction": (
+                        "BULLISH" if bullish_signal else "BEARISH"
+                    ),
+                    "time": current["time"],
+                    "time_utc": current["time_utc"],
+                    "previous_direction": (
+                        "BEARISH"
+                        if previous["close"] < previous["open"]
+                        else "BULLISH"
+                    ),
+                    "open": current["open"],
+                    "high": current["high"],
+                    "low": current["low"],
+                    "close": current["close"],
+                    "big_wick_40_percent": big_wick,
+                }
+            )
+
+        if index >= 2:
+            previous_candle2 = candles_list[index - 1]
+
+            bearish_expansion = (
+                bearish[index - 1]
+                and current["high"] < previous_candle2["high"]
+                and current["close"] < previous_candle2["low"]
+            )
+
+            bullish_expansion = (
+                bullish[index - 1]
+                and current["low"] > previous_candle2["low"]
+                and current["close"] > previous_candle2["high"]
+            )
+
+            if bearish_expansion or bullish_expansion:
+                candle3.append(
+                    {
+                        "direction": (
+                            "BULLISH"
+                            if bullish_expansion
+                            else "BEARISH"
+                        ),
+                        "time": current["time"],
+                        "time_utc": current["time_utc"],
+                        "after_candle2_time_utc": (
+                            previous_candle2["time_utc"]
+                        ),
+                        "open": current["open"],
+                        "high": current["high"],
+                        "low": current["low"],
+                        "close": current["close"],
+                    }
+                )
+
+    return candle2, candle3
+
+
+def build(symbol: str):
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        ticker_future = executor.submit(ticker, symbol)
+
+        candle_futures = {
+            timeframe: executor.submit(
+                candles,
+                symbol,
+                api_timeframe,
+                seconds,
+            )
+            for timeframe, (api_timeframe, seconds) in TFS.items()
+        }
+
+        ticker_data = ticker_future.result()
+
+        raw_candles = {
+            timeframe: future.result()
+            for timeframe, future in candle_futures.items()
+        }
+
+    now = int(time.time())
+    timeframes = {}
+
+    for timeframe, (_, seconds) in TFS.items():
+        raw = raw_candles[timeframe]
+
+        closed = [
+            candle
+            for candle in raw
+            if candle["time"] + seconds <= now
+        ]
+
+        candle2, candle3 = detect(closed)
+
+        timeframes[timeframe] = {
+            "seconds_per_candle": seconds,
+            "latest_live_candle": raw[-1] if raw else None,
+            "latest_closed_candle": closed[-1] if closed else None,
+            "recent_closed_candles": closed[-40:],
+            "recent_candle2": candle2[-20:],
+            "recent_candle3": candle3[-20:],
+        }
+
+    return {
+        "ok": True,
+        "source": "MEXC Futures public API",
+        "symbol": symbol,
+        "supported_symbols": sorted(SUPPORTED_SYMBOLS),
+        "fetched_at_unix": now,
+        "fetched_at_utc": utc(now),
+        "current_price": ticker_data.get("lastPrice"),
+        "high_24h": ticker_data.get("high24Price"),
+        "low_24h": ticker_data.get("lower24Price"),
+        "settings": {
+            "reversal_filter_enabled": True,
+            "filter_length": N,
+            "wick_percent": WICK,
+        },
+        "timeframes": timeframes,
+    }
+
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        try: body=json.dumps(build(),ensure_ascii=False,separators=(',',':')).encode(); code=200
-        except Exception as e: body=json.dumps({'ok':False,'error':str(e)},ensure_ascii=False).encode(); code=502
-        self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(body)
+        try:
+            parsed_url = urllib.parse.urlparse(self.path)
+            query = urllib.parse.parse_qs(parsed_url.query)
+
+            requested_symbol = query.get("symbol", ["TAO_USDT"])[0]
+            symbol = normalize_symbol(requested_symbol)
+
+            result = build(symbol)
+
+            body = json.dumps(
+                result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+            status_code = 200
+
+        except ValueError as exc:
+            body = json.dumps(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+
+            status_code = 400
+
+        except Exception as exc:
+            body = json.dumps(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+
+            status_code = 502
+
+        self.send_response(status_code)
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8",
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
