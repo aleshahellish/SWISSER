@@ -17,8 +17,10 @@ N = 12
 WICK = 40
 
 TFS = {
+    "1m": ("Min1", 60),
     "15m": ("Min15", 900),
     "1h": ("Min60", 3600),
+    "4h": ("Hour4", 14400),
 }
 
 SUPPORTED_SYMBOLS = {
@@ -255,7 +257,7 @@ def detect(candles_list: list[dict]):
 
 
 def build(symbol: str):
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         ticker_future = executor.submit(ticker, symbol)
 
         candle_futures = {
