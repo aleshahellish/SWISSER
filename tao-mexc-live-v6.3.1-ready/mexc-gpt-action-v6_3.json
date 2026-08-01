@@ -1,0 +1,422 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MEXC Live Market Data",
+    "description": "Компактные GPT Action endpoints для MEXC Futures: shortlist, подробная проверка, C2/C3/EQ и фазы H1 C2-C5.",
+    "version": "6.3.1"
+  },
+  "servers": [
+    {
+      "url": "https://tao-mexc-live.vercel.app"
+    }
+  ],
+  "paths": {
+    "/api/scanner_action_v6": {
+      "get": {
+        "operationId": "scanMexcMarkets",
+        "summary": "Компактно просканировать поддерживаемые монеты",
+        "description": "Компактный ответ для GPT Actions. Используй для первичного рейтинга TAO, HYPE, SOL, XRP, DOGE и ETH. BTC получай только как рыночный контекст и не включай в рейтинг сделок. После выбора кандидатов обязательно вызови getMexcMarketSnapshot для подробной перепроверки.",
+        "x-openai-isConsequential": false,
+        "parameters": [
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": false,
+            "description": "Необязательный список пар через запятую. Без параметра сканируются шесть кандидатов и BTC как контекст.",
+            "schema": {
+              "type": "string",
+              "example": "HYPE_USDT,SOL_USDT,XRP_USDT"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Расширенное многомонетное сканирование",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "fetched_at_unix": {
+                      "type": "integer"
+                    },
+                    "fetched_at_utc": {
+                      "type": "string"
+                    },
+                    "requested_symbols": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "settings": {
+                      "type": "object",
+                      "properties": {
+                        "timeframes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "candles_loaded_per_timeframe": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "symbol": {
+                            "type": "string"
+                          },
+                          "current_price": {
+                            "type": "number"
+                          },
+                          "high_24h": {
+                            "type": "number"
+                          },
+                          "low_24h": {
+                            "type": "number"
+                          },
+                          "range_position_24h_percent": {
+                            "type": "number"
+                          },
+                          "higher_timeframe_levels": {
+                            "type": "object",
+                            "description": "Текущие и предыдущие дневные/недельные свечи и их high/low.",
+                            "additionalProperties": true
+                          },
+                          "mtf_hierarchy": {
+                            "type": "object",
+                            "description": "Детерминированная иерархия 1W/1D → 4H → 1H → 15M → 1M.",
+                            "properties": {
+                              "status": {
+                                "type": "string"
+                              },
+                              "method": {
+                                "type": "string"
+                              },
+                              "role_map": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "priority_rule": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "timeframe_signals": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "broad_context_bias": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "higher_timeframe_bias": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "session_timeframe_bias": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "setup_timeframe_bias": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "entry_timeframe_bias": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "alignment_state": {
+                                "type": "string"
+                              },
+                              "trade_direction_preference": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "execution_state": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "conflicts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": true
+                                }
+                              },
+                              "scope_note": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": true
+                          },
+                          "timeframes": {
+                            "type": "object",
+                            "properties": {
+                              "1m": {
+                                "type": "object",
+                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "additionalProperties": true
+                              },
+                              "15m": {
+                                "type": "object",
+                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "additionalProperties": true
+                              },
+                              "1h": {
+                                "type": "object",
+                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "additionalProperties": true
+                              },
+                              "4h": {
+                                "type": "object",
+                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "additionalProperties": true
+                              },
+                              "1d": {
+                                "type": "object",
+                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "additionalProperties": true
+                              },
+                              "1w": {
+                                "type": "object",
+                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "additionalProperties": true
+                              }
+                            },
+                            "additionalProperties": true
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/snapshot_action_v6": {
+      "get": {
+        "operationId": "getMexcMarketSnapshot",
+        "summary": "Получить компактный подробный снимок одной монеты",
+        "description": "Обязательная подробная перепроверка выбранной монеты: C2/C3/EQ, H1 C2-C5, структура, CISD и конфликты. Визуальные POI/FVG/OB и финальный вход Action не подтверждает.",
+        "x-openai-isConsequential": false,
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "Торговая пара MEXC Futures.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "TAO_USDT",
+                "HYPE_USDT",
+                "SOL_USDT",
+                "XRP_USDT",
+                "DOGE_USDT",
+                "ETH_USDT",
+                "BTC_USDT"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Расширенный снимок выбранной монеты",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "symbol": {
+                      "type": "string"
+                    },
+                    "supported_symbols": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "fetched_at_unix": {
+                      "type": "integer"
+                    },
+                    "fetched_at_utc": {
+                      "type": "string"
+                    },
+                    "current_price": {
+                      "type": "number"
+                    },
+                    "high_24h": {
+                      "type": "number"
+                    },
+                    "low_24h": {
+                      "type": "number"
+                    },
+                    "settings": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "higher_timeframe_levels": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "mtf_hierarchy": {
+                      "type": "object",
+                      "description": "Детерминированная иерархия 1W/1D → 4H → 1H → 15M → 1M.",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        },
+                        "method": {
+                          "type": "string"
+                        },
+                        "role_map": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "priority_rule": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "timeframe_signals": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "broad_context_bias": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "higher_timeframe_bias": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "session_timeframe_bias": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "setup_timeframe_bias": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "entry_timeframe_bias": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "alignment_state": {
+                          "type": "string"
+                        },
+                        "trade_direction_preference": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "execution_state": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "conflicts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "scope_note": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "timeframes": {
+                      "type": "object",
+                      "properties": {
+                        "1m": {
+                          "type": "object",
+                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "additionalProperties": true
+                        },
+                        "15m": {
+                          "type": "object",
+                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "additionalProperties": true
+                        },
+                        "1h": {
+                          "type": "object",
+                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "additionalProperties": true
+                        },
+                        "4h": {
+                          "type": "object",
+                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "additionalProperties": true
+                        },
+                        "1d": {
+                          "type": "object",
+                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "additionalProperties": true
+                        },
+                        "1w": {
+                          "type": "object",
+                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "additionalProperties": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
