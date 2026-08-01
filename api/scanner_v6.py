@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
+from candle_closure import closure_sequence_summary, detect_candle_closures
+
 
 BASE = "https://api.mexc.com"
 FILTER_LENGTH = 12
@@ -224,110 +226,14 @@ def fetch_candles(
     return sorted(output, key=lambda candle: candle["time"])[-count:]
 
 
-def detect(candles_list: list[dict]) -> tuple[list[dict], list[dict]]:
-    candle2 = []
-    candle3 = []
-
-    bullish = [False] * len(candles_list)
-    bearish = [False] * len(candles_list)
-
-    for index in range(1, len(candles_list)):
-        previous = candles_list[index - 1]
-        current = candles_list[index]
-        window = candles_list[
-            max(0, index - FILTER_LENGTH + 1): index + 1
-        ]
-
-        bullish_signal = (
-            current["low"] == min(item["low"] for item in window)
-            and previous["close"] < previous["open"]
-            and current["low"] < previous["low"]
-            and current["close"] > previous["low"]
-        )
-
-        bearish_signal = (
-            current["high"] == max(item["high"] for item in window)
-            and previous["close"] > previous["open"]
-            and current["high"] > previous["high"]
-            and current["close"] < previous["high"]
-        )
-
-        bullish[index] = bullish_signal
-        bearish[index] = bearish_signal
-
-        if bullish_signal or bearish_signal:
-            candle_range = current["high"] - current["low"]
-            wick_threshold = 0.01 * WICK_PERCENT * candle_range
-
-            if bullish_signal:
-                big_wick = (
-                    min(current["close"], current["open"])
-                    - current["low"]
-                    > wick_threshold
-                )
-            else:
-                big_wick = (
-                    current["high"]
-                    - max(current["close"], current["open"])
-                    > wick_threshold
-                )
-
-            candle2.append(
-                {
-                    "direction": (
-                        "BULLISH" if bullish_signal else "BEARISH"
-                    ),
-                    "time": current["time"],
-                    "time_utc": current["time_utc"],
-                    "previous_direction": (
-                        "BEARISH"
-                        if previous["close"] < previous["open"]
-                        else "BULLISH"
-                    ),
-                    "open": current["open"],
-                    "high": current["high"],
-                    "low": current["low"],
-                    "close": current["close"],
-                    "big_wick_40_percent": big_wick,
-                }
-            )
-
-        if index >= 2:
-            previous_candle2 = candles_list[index - 1]
-
-            bearish_expansion = (
-                bearish[index - 1]
-                and current["high"] < previous_candle2["high"]
-                and current["close"] < previous_candle2["low"]
-            )
-
-            bullish_expansion = (
-                bullish[index - 1]
-                and current["low"] > previous_candle2["low"]
-                and current["close"] > previous_candle2["high"]
-            )
-
-            if bearish_expansion or bullish_expansion:
-                candle3.append(
-                    {
-                        "direction": (
-                            "BULLISH"
-                            if bullish_expansion
-                            else "BEARISH"
-                        ),
-                        "time": current["time"],
-                        "time_utc": current["time_utc"],
-                        "after_candle2_time_utc": (
-                            previous_candle2["time_utc"]
-                        ),
-                        "open": current["open"],
-                        "high": current["high"],
-                        "low": current["low"],
-                        "close": current["close"],
-                    }
-                )
-
-    return candle2, candle3
+def detect(
+    candles_list: list[dict],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    return detect_candle_closures(
+        candles_list,
+        filter_length=FILTER_LENGTH,
+        wick_percent=WICK_PERCENT,
+    )
 
 
 def number(value):
@@ -1288,7 +1194,8 @@ def summarize_timeframe(
     current_price,
 ) -> dict:
     closed, live = split_closed_and_live(candles_list, seconds, now)
-    candle2, candle3 = detect(closed)
+    candle2, candle3, sweep_displacement = detect(closed)
+    sequence = closure_sequence_summary(closed, candle2, candle3)
 
     latest_c2 = candle2[-1] if candle2 else None
     latest_c3 = candle3[-1] if candle3 else None
@@ -1327,6 +1234,8 @@ def summarize_timeframe(
         "recent_closed_candles": closed[-8:],
         "recent_candle2": candle2[-3:],
         "recent_candle3": candle3[-3:],
+        "recent_sweep_displacement": sweep_displacement[-3:],
+        "closure_sequence": sequence,
         "latest_candle2_confirmed_by_candle3": latest_c2_confirmed,
         "bars_since_latest_candle2": bars_since_c2,
         "bars_since_latest_candle3": bars_since_c3,
@@ -1364,6 +1273,7 @@ def _nested_value(data: dict, path: tuple[str, ...], default=None):
 def _latest_trigger(timeframe_data: dict) -> dict:
     candle2_items = timeframe_data.get("recent_candle2") or []
     candle3_items = timeframe_data.get("recent_candle3") or []
+    sequence = timeframe_data.get("closure_sequence") or {}
     latest_c2 = candle2_items[-1] if candle2_items else None
     latest_c3 = candle3_items[-1] if candle3_items else None
 
@@ -1386,18 +1296,40 @@ def _latest_trigger(timeframe_data: dict) -> dict:
             return int((latest_time - event_time) / seconds)
         return None
 
+    def event_ref(event):
+        if not isinstance(event, dict):
+            return None
+        return {
+            "type": event.get("type"),
+            "direction": event.get("direction"),
+            "time": event.get("time"),
+            "time_utc": event.get("time_utc"),
+        }
+
+    shared = {
+        "latest_c2": event_ref(latest_c2),
+        "latest_c3": event_ref(latest_c3),
+        "closure_sequence": sequence,
+        "freshness_rule_bars": 3,
+    }
+
     if c3_time >= c2_time and c3_time >= 0:
         bars_since = calculated_bars_since(
             c3_time,
             timeframe_data.get("bars_since_latest_candle3"),
         )
+        is_fresh = isinstance(bars_since, int) and bars_since <= 3
         return {
             "type": "C3_CONFIRMED",
             "direction": latest_c3.get("direction", "UNDETERMINED"),
             "time": latest_c3.get("time"),
             "time_utc": latest_c3.get("time_utc"),
             "bars_since": bars_since,
-            "is_fresh": isinstance(bars_since, int) and bars_since <= 3,
+            "is_fresh": is_fresh,
+            "is_fresh_for_entry_scan": is_fresh,
+            "eq_respected": latest_c3.get("eq_respected"),
+            "quality": latest_c3.get("quality"),
+            **shared,
         }
 
     if c2_time >= 0:
@@ -1408,10 +1340,15 @@ def _latest_trigger(timeframe_data: dict) -> dict:
         confirmed = timeframe_data.get("latest_candle2_confirmed_by_candle3")
         if confirmed is None:
             confirmed = any(
-                item.get("after_candle2_time_utc") == latest_c2.get("time_utc")
+                (
+                    item.get("after_candle2_time") == latest_c2.get("time")
+                    or item.get("after_candle2_time_utc")
+                    == latest_c2.get("time_utc")
+                )
                 for item in candle3_items
                 if isinstance(item, dict)
             )
+        is_fresh = isinstance(bars_since, int) and bars_since <= 3
         return {
             "type": (
                 "C2_CONFIRMED_BY_C3" if confirmed else "C2_UNCONFIRMED"
@@ -1420,7 +1357,9 @@ def _latest_trigger(timeframe_data: dict) -> dict:
             "time": latest_c2.get("time"),
             "time_utc": latest_c2.get("time_utc"),
             "bars_since": bars_since,
-            "is_fresh": isinstance(bars_since, int) and bars_since <= 3,
+            "is_fresh": is_fresh,
+            "is_fresh_for_entry_scan": is_fresh,
+            **shared,
         }
 
     return {
@@ -1430,6 +1369,8 @@ def _latest_trigger(timeframe_data: dict) -> dict:
         "time_utc": None,
         "bars_since": None,
         "is_fresh": False,
+        "is_fresh_for_entry_scan": False,
+        **shared,
     }
 
 
@@ -1446,6 +1387,12 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
             "effective_cisd_direction": "UNDETERMINED",
             "swing_sequence_bias": "INSUFFICIENT_DATA",
             "latest_trigger": _latest_trigger({}),
+            "closure_sequence": {},
+            "opposite_closure_to_primary_direction": {
+                "active": False,
+                "direction": None,
+                "reason": "NO_PRIMARY_DIRECTION",
+            },
             "internal_conflicts": [],
         }
 
@@ -1505,6 +1452,32 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
     else:
         confidence = "LOW"
 
+    sequence = timeframe_data.get("closure_sequence") or {}
+    latest_c2_directions = sequence.get("directions") or []
+    opposite_direction = (
+        "BEARISH" if primary == "BULLISH"
+        else "BULLISH" if primary == "BEARISH"
+        else None
+    )
+    sequence_bars_since = sequence.get("bars_since_c2")
+    opposite_is_recent = (
+        opposite_direction in latest_c2_directions
+        and isinstance(sequence_bars_since, int)
+        and sequence_bars_since <= 3
+    )
+    opposite_warning = {
+        "active": opposite_is_recent,
+        "direction": opposite_direction if opposite_is_recent else None,
+        "bars_since_c2": (
+            sequence_bars_since if opposite_is_recent else None
+        ),
+        "reason": (
+            "RECENT_C2_OPPOSES_PRIMARY_DIRECTION"
+            if opposite_is_recent
+            else "NONE"
+        ),
+    }
+
     return {
         "status": "ok" if primary != "UNDETERMINED" else "partial",
         "timeframe": timeframe,
@@ -1516,6 +1489,8 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
         "effective_cisd_direction": cisd,
         "swing_sequence_bias": swing,
         "latest_trigger": _latest_trigger(timeframe_data),
+        "closure_sequence": sequence,
+        "opposite_closure_to_primary_direction": opposite_warning,
         "internal_conflicts": conflicts,
     }
 
@@ -1796,7 +1771,7 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
 
     return {
         "status": "ok" if complete else "partial",
-        "method": "deterministic_mtf_hierarchy_v1",
+        "method": "deterministic_mtf_hierarchy_v2",
         "closed_candles_only_for_structure": True,
         "role_map": MTF_ROLE_MAP,
         "priority_rule": [
@@ -1809,6 +1784,10 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
         "broad_context_bias": broad_context,
         "higher_timeframe_bias": htf_bias,
         "session_timeframe_bias": _single_bias(signals, "1h"),
+        "hourly_closure_phase": signals["1h"].get("closure_sequence"),
+        "hourly_opposite_closure_warning": signals["1h"].get(
+            "opposite_closure_to_primary_direction"
+        ),
         "setup_timeframe_bias": _single_bias(signals, "15m"),
         "entry_timeframe_bias": _single_bias(signals, "1m"),
         "alignment_scope": ["4h", "1h", "15m", "1m"],
@@ -1967,6 +1946,12 @@ def build(path: str) -> dict:
         item = {
             "ok": symbol_ok,
             "symbol": symbol,
+            "analysis_role": (
+                "MARKET_CONTEXT"
+                if symbol == "BTC_USDT"
+                else "TRADE_CANDIDATE"
+            ),
+            "eligible_trade_candidate": symbol != "BTC_USDT",
             "current_price": current_price,
             "high_24h": high_24h,
             "low_24h": low_24h,
@@ -1989,15 +1974,22 @@ def build(path: str) -> dict:
         "ok": all(item["ok"] for item in results),
         "source": "MEXC Futures public API",
         "mode": "enhanced_multi_coin_scanner_v6",
-        "version": "6.0-multi-timeframe-hierarchy",
+        "version": "6.3-closure-sequence",
         "fetched_at_unix": now,
         "fetched_at_utc": utc(now),
         "requested_symbols": symbols,
+        "candidate_symbols": [
+            symbol for symbol in symbols if symbol != "BTC_USDT"
+        ],
+        "context_symbols": [
+            symbol for symbol in symbols if symbol == "BTC_USDT"
+        ],
         "count": len(results),
         "settings": {
             "reversal_filter_enabled": True,
             "filter_length": FILTER_LENGTH,
             "wick_percent": WICK_PERCENT,
+            "btc_role": "MARKET_CONTEXT_NOT_TRADE_CANDIDATE",
             "timeframes": list(TIMEFRAMES.keys()),
             "candles_loaded_per_timeframe": {
                 timeframe: config[2]

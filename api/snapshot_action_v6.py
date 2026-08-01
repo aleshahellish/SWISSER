@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
+from candle_closure import closure_sequence_summary, detect_candle_closures
+
 
 BASE = "https://api.mexc.com"
 FILTER_LENGTH = 12
@@ -17,6 +19,8 @@ WICK_PERCENT = 40
 SWING_LEFT_BARS = 2
 SWING_RIGHT_BARS = 2
 SWING_RECENT_LIMIT = 8
+GPT_ACTION_CHARACTER_LIMIT = 100_000
+GPT_ACTION_SAFE_TARGET = 80_000
 
 TIMEFRAMES = {
     "1m": ("Min1", 60, 300),
@@ -160,110 +164,14 @@ def candles(
     )[-count:]
 
 
-def detect(candles_list: list[dict]) -> tuple[list[dict], list[dict]]:
-    candle2 = []
-    candle3 = []
-
-    bullish = [False] * len(candles_list)
-    bearish = [False] * len(candles_list)
-
-    for index in range(1, len(candles_list)):
-        previous = candles_list[index - 1]
-        current = candles_list[index]
-        window = candles_list[
-            max(0, index - FILTER_LENGTH + 1): index + 1
-        ]
-
-        bullish_signal = (
-            current["low"] == min(item["low"] for item in window)
-            and previous["close"] < previous["open"]
-            and current["low"] < previous["low"]
-            and current["close"] > previous["low"]
-        )
-
-        bearish_signal = (
-            current["high"] == max(item["high"] for item in window)
-            and previous["close"] > previous["open"]
-            and current["high"] > previous["high"]
-            and current["close"] < previous["high"]
-        )
-
-        bullish[index] = bullish_signal
-        bearish[index] = bearish_signal
-
-        if bullish_signal or bearish_signal:
-            candle_range = current["high"] - current["low"]
-            wick_threshold = 0.01 * WICK_PERCENT * candle_range
-
-            if bullish_signal:
-                big_wick = (
-                    min(current["close"], current["open"])
-                    - current["low"]
-                    > wick_threshold
-                )
-            else:
-                big_wick = (
-                    current["high"]
-                    - max(current["close"], current["open"])
-                    > wick_threshold
-                )
-
-            candle2.append(
-                {
-                    "direction": (
-                        "BULLISH" if bullish_signal else "BEARISH"
-                    ),
-                    "time": current["time"],
-                    "time_utc": current["time_utc"],
-                    "previous_direction": (
-                        "BEARISH"
-                        if previous["close"] < previous["open"]
-                        else "BULLISH"
-                    ),
-                    "open": current["open"],
-                    "high": current["high"],
-                    "low": current["low"],
-                    "close": current["close"],
-                    "big_wick_40_percent": big_wick,
-                }
-            )
-
-        if index >= 2:
-            previous_candle2 = candles_list[index - 1]
-
-            bearish_expansion = (
-                bearish[index - 1]
-                and current["high"] < previous_candle2["high"]
-                and current["close"] < previous_candle2["low"]
-            )
-
-            bullish_expansion = (
-                bullish[index - 1]
-                and current["low"] > previous_candle2["low"]
-                and current["close"] > previous_candle2["high"]
-            )
-
-            if bearish_expansion or bullish_expansion:
-                candle3.append(
-                    {
-                        "direction": (
-                            "BULLISH"
-                            if bullish_expansion
-                            else "BEARISH"
-                        ),
-                        "time": current["time"],
-                        "time_utc": current["time_utc"],
-                        "after_candle2_time_utc": (
-                            previous_candle2["time_utc"]
-                        ),
-                        "open": current["open"],
-                        "high": current["high"],
-                        "low": current["low"],
-                        "close": current["close"],
-                    }
-                )
-
-    return candle2, candle3
+def detect(
+    candles_list: list[dict],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    return detect_candle_closures(
+        candles_list,
+        filter_length=FILTER_LENGTH,
+        wick_percent=WICK_PERCENT,
+    )
 
 
 def split_closed_and_live(
@@ -1254,6 +1162,7 @@ def _nested_value(data: dict, path: tuple[str, ...], default=None):
 def _latest_trigger(timeframe_data: dict) -> dict:
     candle2_items = timeframe_data.get("recent_candle2") or []
     candle3_items = timeframe_data.get("recent_candle3") or []
+    sequence = timeframe_data.get("closure_sequence") or {}
     latest_c2 = candle2_items[-1] if candle2_items else None
     latest_c3 = candle3_items[-1] if candle3_items else None
 
@@ -1276,18 +1185,40 @@ def _latest_trigger(timeframe_data: dict) -> dict:
             return int((latest_time - event_time) / seconds)
         return None
 
+    def event_ref(event):
+        if not isinstance(event, dict):
+            return None
+        return {
+            "type": event.get("type"),
+            "direction": event.get("direction"),
+            "time": event.get("time"),
+            "time_utc": event.get("time_utc"),
+        }
+
+    shared = {
+        "latest_c2": event_ref(latest_c2),
+        "latest_c3": event_ref(latest_c3),
+        "closure_sequence": sequence,
+        "freshness_rule_bars": 3,
+    }
+
     if c3_time >= c2_time and c3_time >= 0:
         bars_since = calculated_bars_since(
             c3_time,
             timeframe_data.get("bars_since_latest_candle3"),
         )
+        is_fresh = isinstance(bars_since, int) and bars_since <= 3
         return {
             "type": "C3_CONFIRMED",
             "direction": latest_c3.get("direction", "UNDETERMINED"),
             "time": latest_c3.get("time"),
             "time_utc": latest_c3.get("time_utc"),
             "bars_since": bars_since,
-            "is_fresh": isinstance(bars_since, int) and bars_since <= 3,
+            "is_fresh": is_fresh,
+            "is_fresh_for_entry_scan": is_fresh,
+            "eq_respected": latest_c3.get("eq_respected"),
+            "quality": latest_c3.get("quality"),
+            **shared,
         }
 
     if c2_time >= 0:
@@ -1298,10 +1229,15 @@ def _latest_trigger(timeframe_data: dict) -> dict:
         confirmed = timeframe_data.get("latest_candle2_confirmed_by_candle3")
         if confirmed is None:
             confirmed = any(
-                item.get("after_candle2_time_utc") == latest_c2.get("time_utc")
+                (
+                    item.get("after_candle2_time") == latest_c2.get("time")
+                    or item.get("after_candle2_time_utc")
+                    == latest_c2.get("time_utc")
+                )
                 for item in candle3_items
                 if isinstance(item, dict)
             )
+        is_fresh = isinstance(bars_since, int) and bars_since <= 3
         return {
             "type": (
                 "C2_CONFIRMED_BY_C3" if confirmed else "C2_UNCONFIRMED"
@@ -1310,7 +1246,9 @@ def _latest_trigger(timeframe_data: dict) -> dict:
             "time": latest_c2.get("time"),
             "time_utc": latest_c2.get("time_utc"),
             "bars_since": bars_since,
-            "is_fresh": isinstance(bars_since, int) and bars_since <= 3,
+            "is_fresh": is_fresh,
+            "is_fresh_for_entry_scan": is_fresh,
+            **shared,
         }
 
     return {
@@ -1320,6 +1258,8 @@ def _latest_trigger(timeframe_data: dict) -> dict:
         "time_utc": None,
         "bars_since": None,
         "is_fresh": False,
+        "is_fresh_for_entry_scan": False,
+        **shared,
     }
 
 
@@ -1336,6 +1276,12 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
             "effective_cisd_direction": "UNDETERMINED",
             "swing_sequence_bias": "INSUFFICIENT_DATA",
             "latest_trigger": _latest_trigger({}),
+            "closure_sequence": {},
+            "opposite_closure_to_primary_direction": {
+                "active": False,
+                "direction": None,
+                "reason": "NO_PRIMARY_DIRECTION",
+            },
             "internal_conflicts": [],
         }
 
@@ -1395,6 +1341,32 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
     else:
         confidence = "LOW"
 
+    sequence = timeframe_data.get("closure_sequence") or {}
+    latest_c2_directions = sequence.get("directions") or []
+    opposite_direction = (
+        "BEARISH" if primary == "BULLISH"
+        else "BULLISH" if primary == "BEARISH"
+        else None
+    )
+    sequence_bars_since = sequence.get("bars_since_c2")
+    opposite_is_recent = (
+        opposite_direction in latest_c2_directions
+        and isinstance(sequence_bars_since, int)
+        and sequence_bars_since <= 3
+    )
+    opposite_warning = {
+        "active": opposite_is_recent,
+        "direction": opposite_direction if opposite_is_recent else None,
+        "bars_since_c2": (
+            sequence_bars_since if opposite_is_recent else None
+        ),
+        "reason": (
+            "RECENT_C2_OPPOSES_PRIMARY_DIRECTION"
+            if opposite_is_recent
+            else "NONE"
+        ),
+    }
+
     return {
         "status": "ok" if primary != "UNDETERMINED" else "partial",
         "timeframe": timeframe,
@@ -1406,6 +1378,8 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
         "effective_cisd_direction": cisd,
         "swing_sequence_bias": swing,
         "latest_trigger": _latest_trigger(timeframe_data),
+        "closure_sequence": sequence,
+        "opposite_closure_to_primary_direction": opposite_warning,
         "internal_conflicts": conflicts,
     }
 
@@ -1686,7 +1660,7 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
 
     return {
         "status": "ok" if complete else "partial",
-        "method": "deterministic_mtf_hierarchy_v1",
+        "method": "deterministic_mtf_hierarchy_v2",
         "closed_candles_only_for_structure": True,
         "role_map": MTF_ROLE_MAP,
         "priority_rule": [
@@ -1699,6 +1673,10 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
         "broad_context_bias": broad_context,
         "higher_timeframe_bias": htf_bias,
         "session_timeframe_bias": _single_bias(signals, "1h"),
+        "hourly_closure_phase": signals["1h"].get("closure_sequence"),
+        "hourly_opposite_closure_warning": signals["1h"].get(
+            "opposite_closure_to_primary_direction"
+        ),
         "setup_timeframe_bias": _single_bias(signals, "15m"),
         "entry_timeframe_bias": _single_bias(signals, "1m"),
         "alignment_scope": ["4h", "1h", "15m", "1m"],
@@ -1806,7 +1784,8 @@ def build(symbol: str) -> dict:
     for timeframe, (_, seconds, _) in TIMEFRAMES.items():
         raw = raw_candles[timeframe]
         closed, live = split_closed_and_live(raw, seconds, now)
-        candle2, candle3 = detect(closed)
+        candle2, candle3, sweep_displacement = detect(closed)
+        sequence = closure_sequence_summary(closed, candle2, candle3)
 
         timeframes[timeframe] = {
             "seconds_per_candle": seconds,
@@ -1815,6 +1794,8 @@ def build(symbol: str) -> dict:
             "recent_closed_candles": closed[-40:],
             "recent_candle2": candle2[-20:],
             "recent_candle3": candle3[-20:],
+            "recent_sweep_displacement": sweep_displacement[-20:],
+            "closure_sequence": sequence,
             "swing_points": swing_summary(
                 closed,
                 ticker_data.get("lastPrice"),
@@ -1830,8 +1811,14 @@ def build(symbol: str) -> dict:
         "ok": True,
         "source": "MEXC Futures public API",
         "mode": "enhanced_snapshot_v6",
-        "version": "6.0-multi-timeframe-hierarchy",
+        "version": "6.3-closure-sequence",
         "symbol": symbol,
+        "analysis_role": (
+            "MARKET_CONTEXT"
+            if symbol == "BTC_USDT"
+            else "TRADE_CANDIDATE"
+        ),
+        "eligible_trade_candidate": symbol != "BTC_USDT",
         "supported_symbols": sorted(SUPPORTED_SYMBOLS),
         "fetched_at_unix": now,
         "fetched_at_utc": utc(now),
@@ -1842,6 +1829,7 @@ def build(symbol: str) -> dict:
             "reversal_filter_enabled": True,
             "filter_length": FILTER_LENGTH,
             "wick_percent": WICK_PERCENT,
+            "btc_role": "MARKET_CONTEXT_NOT_TRADE_CANDIDATE",
             "timeframes": list(TIMEFRAMES.keys()),
             "swing_detection": {
                 "method": "confirmed_fractal",
@@ -1974,6 +1962,115 @@ def _action_cisd(event):
     }
 
 
+def _action_closure_sequence(sequence):
+    if not isinstance(sequence, dict):
+        return None
+
+    return {
+        "state": sequence.get("state"),
+        "candle_number": sequence.get("candle_number"),
+        "direction": sequence.get("direction"),
+        "bars_since_c2": sequence.get("bars_since_c2"),
+        "c3_confirmed": sequence.get("c3_confirmed"),
+        "c3_eq_respected": sequence.get("c3_eq_respected"),
+        "opposite_c2_after_confirmed_sequence": sequence.get(
+            "opposite_c2_after_confirmed_sequence"
+        ),
+    }
+
+
+def _action_trigger(trigger):
+    if not isinstance(trigger, dict):
+        return None
+
+    latest_c2 = trigger.get("latest_c2") or {}
+    latest_c3 = trigger.get("latest_c3") or {}
+
+    return {
+        "type": trigger.get("type"),
+        "direction": trigger.get("direction"),
+        "time": trigger.get("time"),
+        "time_utc": trigger.get("time_utc"),
+        "bars_since": trigger.get("bars_since"),
+        "is_fresh": trigger.get("is_fresh"),
+        "is_fresh_for_entry_scan": trigger.get(
+            "is_fresh_for_entry_scan"
+        ),
+        "eq_respected": trigger.get("eq_respected"),
+        "quality": trigger.get("quality"),
+        "latest_c2": {
+            "direction": latest_c2.get("direction"),
+            "time": latest_c2.get("time"),
+        },
+        "latest_c3": {
+            "direction": latest_c3.get("direction"),
+            "time": latest_c3.get("time"),
+        },
+    }
+
+
+def _action_timeframe_signal(signal):
+    if not isinstance(signal, dict):
+        return None
+
+    return {
+        "status": signal.get("status"),
+        "timeframe": signal.get("timeframe"),
+        "role": signal.get("role"),
+        "primary_direction": signal.get("primary_direction"),
+        "direction_source": signal.get("direction_source"),
+        "confidence": signal.get("confidence"),
+        "structure_direction": signal.get("structure_direction"),
+        "effective_cisd_direction": signal.get(
+            "effective_cisd_direction"
+        ),
+        "swing_sequence_bias": signal.get("swing_sequence_bias"),
+        "latest_trigger": _action_trigger(signal.get("latest_trigger")),
+        "closure_sequence": _action_closure_sequence(
+            signal.get("closure_sequence")
+        ),
+        "opposite_closure_to_primary_direction": signal.get(
+            "opposite_closure_to_primary_direction"
+        ),
+        "internal_conflicts": signal.get("internal_conflicts"),
+    }
+
+
+def _action_execution_state(state):
+    if not isinstance(state, dict):
+        return None
+
+    return {
+        "state": state.get("state"),
+        "preferred_direction": state.get("preferred_direction"),
+        "entry_timeframe_direction": state.get(
+            "entry_timeframe_direction"
+        ),
+        "relation_to_preference": state.get(
+            "relation_to_preference"
+        ),
+        "latest_entry_trigger": _action_trigger(
+            state.get("latest_entry_trigger")
+        ),
+    }
+
+
+def encode_gpt_action_payload(result: dict) -> bytes:
+    """Serialize with a safety guard below GPT Actions' 100k limit."""
+
+    text = json.dumps(
+        result,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if len(text) >= GPT_ACTION_CHARACTER_LIMIT:
+        raise RuntimeError(
+            "Compact snapshot response exceeded the GPT Actions "
+            f"limit: {len(text)} characters"
+        )
+    return text.encode("utf-8")
+
+
 def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
     """Подробный, но ограниченный по размеру snapshot для GPT Actions."""
 
@@ -1983,8 +2080,12 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
         "ok": full_result.get("ok"),
         "source": full_result.get("source"),
         "mode": "gpt_compact_snapshot_v6",
-        "version": "6.0-gpt-action-compact",
+        "version": "6.3.1-gpt-action-compact",
         "symbol": full_result.get("symbol"),
+        "analysis_role": full_result.get("analysis_role"),
+        "eligible_trade_candidate": full_result.get(
+            "eligible_trade_candidate"
+        ),
         "supported_symbols": full_result.get("supported_symbols"),
         "fetched_at_unix": full_result.get("fetched_at_unix"),
         "fetched_at_utc": full_result.get("fetched_at_utc"),
@@ -1997,9 +2098,12 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
         "mtf_hierarchy": {
             "role_map": hierarchy.get("role_map"),
             "priority_rule": hierarchy.get("priority_rule"),
-            "timeframe_signals": hierarchy.get(
-                "timeframe_signals"
-            ),
+            "timeframe_signals": {
+                timeframe: _action_timeframe_signal(signal)
+                for timeframe, signal in (
+                    hierarchy.get("timeframe_signals") or {}
+                ).items()
+            },
             "broad_context_bias": hierarchy.get(
                 "broad_context_bias"
             ),
@@ -2008,6 +2112,12 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
             ),
             "session_timeframe_bias": hierarchy.get(
                 "session_timeframe_bias"
+            ),
+            "hourly_closure_phase": hierarchy.get(
+                "hourly_closure_phase"
+            ),
+            "hourly_opposite_closure_warning": hierarchy.get(
+                "hourly_opposite_closure_warning"
             ),
             "setup_timeframe_bias": hierarchy.get(
                 "setup_timeframe_bias"
@@ -2019,7 +2129,9 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
             "trade_direction_preference": hierarchy.get(
                 "trade_direction_preference"
             ),
-            "execution_state": hierarchy.get("execution_state"),
+            "execution_state": _action_execution_state(
+                hierarchy.get("execution_state")
+            ),
             "conflicts": hierarchy.get("conflicts"),
             "scope_note": hierarchy.get("scope_note"),
         },
@@ -2052,14 +2164,20 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
                 _action_candle(candle)
                 for candle in (
                     block.get("recent_closed_candles") or []
-                )[-8:]
+                )[-5:]
             ],
             "recent_candle2": (
                 block.get("recent_candle2") or []
-            )[-3:],
+            )[-2:],
             "recent_candle3": (
                 block.get("recent_candle3") or []
-            )[-3:],
+            )[-2:],
+            "recent_sweep_displacement": (
+                block.get("recent_sweep_displacement") or []
+            )[-2:],
+            "closure_sequence": _action_closure_sequence(
+                block.get("closure_sequence")
+            ),
             "swing_points": {
                 "latest_swing_high": _action_point(
                     swing_points.get("latest_swing_high")
@@ -2081,13 +2199,13 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
                     _action_point(point)
                     for point in (
                         swing_points.get("recent_swing_highs") or []
-                    )[-3:]
+                    )[-2:]
                 ],
                 "recent_swing_lows": [
                     _action_point(point)
                     for point in (
                         swing_points.get("recent_swing_lows") or []
-                    )[-3:]
+                    )[-2:]
                 ],
             },
             "swing_structure": {
@@ -2147,7 +2265,7 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
                             breaks.get(
                                 "recent_structure_break_events"
                             ) or []
-                        )[-3:]
+                        )[-2:]
                     ],
                     "break_event_count": breaks.get(
                         "break_event_count"
@@ -2200,13 +2318,13 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
                         _action_cisd(event)
                         for event in (
                             cisd.get("recent_confirmed_cisd") or []
-                        )[-3:]
+                        )[-2:]
                     ],
                     "recent_pending_cisd": [
                         _action_cisd(event)
                         for event in (
                             cisd.get("recent_pending_cisd") or []
-                        )[-3:]
+                        )[-2:]
                     ],
                     "confirmed_count": cisd.get(
                         "confirmed_count"
@@ -2232,11 +2350,7 @@ class handler(BaseHTTPRequestHandler):
 
             result = compact_snapshot_for_gpt_action(build(symbol))
 
-            body = json.dumps(
-                result,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
+            body = encode_gpt_action_payload(result)
 
             status_code = 200
 

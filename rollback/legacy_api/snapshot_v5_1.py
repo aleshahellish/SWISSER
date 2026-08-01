@@ -10,8 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
-from candle_closure import closure_sequence_summary, detect_candle_closures
-
 
 BASE = "https://api.mexc.com"
 FILTER_LENGTH = 12
@@ -67,7 +65,7 @@ def request_json(path: str, params: dict | None = None):
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Mozilla/5.0 MEXC-Live-Analyst-V6/1.0",
+            "User-Agent": "Mozilla/5.0 MEXC-Live-Analyst-V5/1.0",
             "Accept": "application/json",
         },
     )
@@ -162,14 +160,110 @@ def candles(
     )[-count:]
 
 
-def detect(
-    candles_list: list[dict],
-) -> tuple[list[dict], list[dict], list[dict]]:
-    return detect_candle_closures(
-        candles_list,
-        filter_length=FILTER_LENGTH,
-        wick_percent=WICK_PERCENT,
-    )
+def detect(candles_list: list[dict]) -> tuple[list[dict], list[dict]]:
+    candle2 = []
+    candle3 = []
+
+    bullish = [False] * len(candles_list)
+    bearish = [False] * len(candles_list)
+
+    for index in range(1, len(candles_list)):
+        previous = candles_list[index - 1]
+        current = candles_list[index]
+        window = candles_list[
+            max(0, index - FILTER_LENGTH + 1): index + 1
+        ]
+
+        bullish_signal = (
+            current["low"] == min(item["low"] for item in window)
+            and previous["close"] < previous["open"]
+            and current["low"] < previous["low"]
+            and current["close"] > previous["low"]
+        )
+
+        bearish_signal = (
+            current["high"] == max(item["high"] for item in window)
+            and previous["close"] > previous["open"]
+            and current["high"] > previous["high"]
+            and current["close"] < previous["high"]
+        )
+
+        bullish[index] = bullish_signal
+        bearish[index] = bearish_signal
+
+        if bullish_signal or bearish_signal:
+            candle_range = current["high"] - current["low"]
+            wick_threshold = 0.01 * WICK_PERCENT * candle_range
+
+            if bullish_signal:
+                big_wick = (
+                    min(current["close"], current["open"])
+                    - current["low"]
+                    > wick_threshold
+                )
+            else:
+                big_wick = (
+                    current["high"]
+                    - max(current["close"], current["open"])
+                    > wick_threshold
+                )
+
+            candle2.append(
+                {
+                    "direction": (
+                        "BULLISH" if bullish_signal else "BEARISH"
+                    ),
+                    "time": current["time"],
+                    "time_utc": current["time_utc"],
+                    "previous_direction": (
+                        "BEARISH"
+                        if previous["close"] < previous["open"]
+                        else "BULLISH"
+                    ),
+                    "open": current["open"],
+                    "high": current["high"],
+                    "low": current["low"],
+                    "close": current["close"],
+                    "big_wick_40_percent": big_wick,
+                }
+            )
+
+        if index >= 2:
+            previous_candle2 = candles_list[index - 1]
+
+            bearish_expansion = (
+                bearish[index - 1]
+                and current["high"] < previous_candle2["high"]
+                and current["close"] < previous_candle2["low"]
+            )
+
+            bullish_expansion = (
+                bullish[index - 1]
+                and current["low"] > previous_candle2["low"]
+                and current["close"] > previous_candle2["high"]
+            )
+
+            if bearish_expansion or bullish_expansion:
+                candle3.append(
+                    {
+                        "direction": (
+                            "BULLISH"
+                            if bullish_expansion
+                            else "BEARISH"
+                        ),
+                        "time": current["time"],
+                        "time_utc": current["time_utc"],
+                        "after_candle2_time_utc": (
+                            previous_candle2["time_utc"]
+                        ),
+                        "open": current["open"],
+                        "high": current["high"],
+                        "low": current["low"],
+                        "close": current["close"],
+                    }
+                )
+
+    return candle2, candle3
 
 
 def split_closed_and_live(
@@ -1136,560 +1230,6 @@ def protected_structure_summary(
         ),
     }
 
-DIRECTIONAL_BIASES = {"BULLISH", "BEARISH"}
-
-MTF_ROLE_MAP = {
-    "1w": "BROAD_CONTEXT",
-    "1d": "BROAD_CONTEXT",
-    "4h": "HIGHER_TIMEFRAME_CONTEXT",
-    "1h": "SESSION_DIRECTION",
-    "15m": "SETUP_TIMEFRAME",
-    "1m": "ENTRY_CONFIRMATION",
-}
-
-
-def _nested_value(data: dict, path: tuple[str, ...], default=None):
-    current = data
-    for key in path:
-        if not isinstance(current, dict):
-            return default
-        current = current.get(key)
-    return default if current is None else current
-
-
-def _latest_trigger(timeframe_data: dict) -> dict:
-    candle2_items = timeframe_data.get("recent_candle2") or []
-    candle3_items = timeframe_data.get("recent_candle3") or []
-    sequence = timeframe_data.get("closure_sequence") or {}
-    latest_c2 = candle2_items[-1] if candle2_items else None
-    latest_c3 = candle3_items[-1] if candle3_items else None
-
-    c2_time = latest_c2.get("time", -1) if isinstance(latest_c2, dict) else -1
-    c3_time = latest_c3.get("time", -1) if isinstance(latest_c3, dict) else -1
-
-    def calculated_bars_since(event_time, explicit_value):
-        if isinstance(explicit_value, int):
-            return explicit_value
-        latest_closed = timeframe_data.get("latest_closed_candle") or {}
-        latest_time = latest_closed.get("time")
-        seconds = timeframe_data.get("seconds_per_candle")
-        if (
-            isinstance(event_time, int)
-            and isinstance(latest_time, int)
-            and isinstance(seconds, int)
-            and seconds > 0
-            and latest_time >= event_time
-        ):
-            return int((latest_time - event_time) / seconds)
-        return None
-
-    def event_ref(event):
-        if not isinstance(event, dict):
-            return None
-        return {
-            "type": event.get("type"),
-            "direction": event.get("direction"),
-            "time": event.get("time"),
-            "time_utc": event.get("time_utc"),
-        }
-
-    shared = {
-        "latest_c2": event_ref(latest_c2),
-        "latest_c3": event_ref(latest_c3),
-        "closure_sequence": sequence,
-        "freshness_rule_bars": 3,
-    }
-
-    if c3_time >= c2_time and c3_time >= 0:
-        bars_since = calculated_bars_since(
-            c3_time,
-            timeframe_data.get("bars_since_latest_candle3"),
-        )
-        is_fresh = isinstance(bars_since, int) and bars_since <= 3
-        return {
-            "type": "C3_CONFIRMED",
-            "direction": latest_c3.get("direction", "UNDETERMINED"),
-            "time": latest_c3.get("time"),
-            "time_utc": latest_c3.get("time_utc"),
-            "bars_since": bars_since,
-            "is_fresh": is_fresh,
-            "is_fresh_for_entry_scan": is_fresh,
-            "eq_respected": latest_c3.get("eq_respected"),
-            "quality": latest_c3.get("quality"),
-            **shared,
-        }
-
-    if c2_time >= 0:
-        bars_since = calculated_bars_since(
-            c2_time,
-            timeframe_data.get("bars_since_latest_candle2"),
-        )
-        confirmed = timeframe_data.get("latest_candle2_confirmed_by_candle3")
-        if confirmed is None:
-            confirmed = any(
-                (
-                    item.get("after_candle2_time") == latest_c2.get("time")
-                    or item.get("after_candle2_time_utc")
-                    == latest_c2.get("time_utc")
-                )
-                for item in candle3_items
-                if isinstance(item, dict)
-            )
-        is_fresh = isinstance(bars_since, int) and bars_since <= 3
-        return {
-            "type": (
-                "C2_CONFIRMED_BY_C3" if confirmed else "C2_UNCONFIRMED"
-            ),
-            "direction": latest_c2.get("direction", "UNDETERMINED"),
-            "time": latest_c2.get("time"),
-            "time_utc": latest_c2.get("time_utc"),
-            "bars_since": bars_since,
-            "is_fresh": is_fresh,
-            "is_fresh_for_entry_scan": is_fresh,
-            **shared,
-        }
-
-    return {
-        "type": "NONE",
-        "direction": "UNDETERMINED",
-        "time": None,
-        "time_utc": None,
-        "bars_since": None,
-        "is_fresh": False,
-        "is_fresh_for_entry_scan": False,
-        **shared,
-    }
-
-
-def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
-    if not isinstance(timeframe_data, dict):
-        return {
-            "status": "insufficient_data",
-            "timeframe": timeframe,
-            "role": MTF_ROLE_MAP.get(timeframe, "UNASSIGNED"),
-            "primary_direction": "UNDETERMINED",
-            "direction_source": "NONE",
-            "confidence": "INSUFFICIENT_DATA",
-            "structure_direction": "UNDETERMINED",
-            "effective_cisd_direction": "UNDETERMINED",
-            "swing_sequence_bias": "INSUFFICIENT_DATA",
-            "latest_trigger": _latest_trigger({}),
-            "closure_sequence": {},
-            "opposite_closure_to_primary_direction": {
-                "active": False,
-                "direction": None,
-                "reason": "NO_PRIMARY_DIRECTION",
-            },
-            "internal_conflicts": [],
-        }
-
-    structure = _nested_value(
-        timeframe_data,
-        ("protected_structure", "structure_breaks", "current_structure_direction"),
-        "UNDETERMINED",
-    )
-    cisd = _nested_value(
-        timeframe_data,
-        ("protected_structure", "cisd", "current_cisd_direction"),
-        "UNDETERMINED",
-    )
-    swing = _nested_value(
-        timeframe_data,
-        ("swing_structure", "provisional_swing_bias"),
-        "INSUFFICIENT_DATA",
-    )
-
-    conflicts = []
-
-    if structure in DIRECTIONAL_BIASES:
-        primary = structure
-        source = "CONFIRMED_STRUCTURE"
-        if cisd in DIRECTIONAL_BIASES and cisd != structure:
-            conflicts.append("EFFECTIVE_CISD_OPPOSES_STRUCTURE")
-        if swing in DIRECTIONAL_BIASES and swing != structure:
-            conflicts.append("SWING_SEQUENCE_OPPOSES_STRUCTURE")
-    elif cisd in DIRECTIONAL_BIASES:
-        primary = cisd
-        source = "EFFECTIVE_CISD"
-        if swing in DIRECTIONAL_BIASES and swing != cisd:
-            conflicts.append("SWING_SEQUENCE_OPPOSES_CISD")
-    elif swing in DIRECTIONAL_BIASES:
-        primary = swing
-        source = "SWING_SEQUENCE"
-    else:
-        primary = "UNDETERMINED"
-        source = "NONE"
-
-    if primary == "UNDETERMINED":
-        confidence = "INSUFFICIENT_DATA"
-    elif source == "CONFIRMED_STRUCTURE":
-        aligned_support = 0
-        if cisd == primary:
-            aligned_support += 1
-        if swing == primary:
-            aligned_support += 1
-        if conflicts:
-            confidence = "MEDIUM"
-        elif aligned_support >= 1:
-            confidence = "HIGH"
-        else:
-            confidence = "MEDIUM"
-    elif source == "EFFECTIVE_CISD":
-        confidence = "MEDIUM" if swing == primary else "LOW"
-    else:
-        confidence = "LOW"
-
-    sequence = timeframe_data.get("closure_sequence") or {}
-    latest_c2_directions = sequence.get("directions") or []
-    opposite_direction = (
-        "BEARISH" if primary == "BULLISH"
-        else "BULLISH" if primary == "BEARISH"
-        else None
-    )
-    sequence_bars_since = sequence.get("bars_since_c2")
-    opposite_is_recent = (
-        opposite_direction in latest_c2_directions
-        and isinstance(sequence_bars_since, int)
-        and sequence_bars_since <= 3
-    )
-    opposite_warning = {
-        "active": opposite_is_recent,
-        "direction": opposite_direction if opposite_is_recent else None,
-        "bars_since_c2": (
-            sequence_bars_since if opposite_is_recent else None
-        ),
-        "reason": (
-            "RECENT_C2_OPPOSES_PRIMARY_DIRECTION"
-            if opposite_is_recent
-            else "NONE"
-        ),
-    }
-
-    return {
-        "status": "ok" if primary != "UNDETERMINED" else "partial",
-        "timeframe": timeframe,
-        "role": MTF_ROLE_MAP.get(timeframe, "UNASSIGNED"),
-        "primary_direction": primary,
-        "direction_source": source,
-        "confidence": confidence,
-        "structure_direction": structure,
-        "effective_cisd_direction": cisd,
-        "swing_sequence_bias": swing,
-        "latest_trigger": _latest_trigger(timeframe_data),
-        "closure_sequence": sequence,
-        "opposite_closure_to_primary_direction": opposite_warning,
-        "internal_conflicts": conflicts,
-    }
-
-
-def _consensus(signals: dict[str, dict], timeframes: list[str]) -> dict:
-    directional = [
-        signals[timeframe]["primary_direction"]
-        for timeframe in timeframes
-        if timeframe in signals
-        and signals[timeframe]["primary_direction"] in DIRECTIONAL_BIASES
-    ]
-
-    if not directional:
-        direction = "UNDETERMINED"
-        agreement = "NO_DIRECTIONAL_DATA"
-    elif all(item == directional[0] for item in directional):
-        direction = directional[0]
-        agreement = "ALIGNED" if len(directional) > 1 else "SINGLE_SOURCE"
-    else:
-        direction = "MIXED"
-        agreement = "CONFLICT"
-
-    return {
-        "direction": direction,
-        "agreement": agreement,
-        "timeframes_used": timeframes,
-        "directional_sources": len(directional),
-    }
-
-
-def _single_bias(signals: dict[str, dict], timeframe: str) -> dict:
-    signal = signals.get(timeframe) or _timeframe_signal(timeframe, None)
-    return {
-        "direction": signal["primary_direction"],
-        "timeframe": timeframe,
-        "direction_source": signal["direction_source"],
-        "confidence": signal["confidence"],
-        "internal_conflicts": signal["internal_conflicts"],
-    }
-
-
-def _alignment_state(signals: dict[str, dict]) -> str:
-    h4 = signals["4h"]["primary_direction"]
-    h1 = signals["1h"]["primary_direction"]
-    m15 = signals["15m"]["primary_direction"]
-    m1 = signals["1m"]["primary_direction"]
-
-    core = (h4, h1, m15)
-    if any(item not in DIRECTIONAL_BIASES for item in core):
-        return "INSUFFICIENT_DATA"
-
-    if h4 == h1 == m15 == m1 == "BULLISH":
-        return "FULL_BULLISH_ALIGNMENT"
-    if h4 == h1 == m15 == m1 == "BEARISH":
-        return "FULL_BEARISH_ALIGNMENT"
-
-    if h4 == h1 == m15 == "BULLISH" and m1 != "BULLISH":
-        return "HTF_BULLISH_LTF_PULLBACK"
-    if h4 == h1 == m15 == "BEARISH" and m1 != "BEARISH":
-        return "HTF_BEARISH_LTF_PULLBACK"
-
-    if h4 == h1 == "BULLISH" and m15 == "BEARISH":
-        return "HTF_BULLISH_LTF_PULLBACK"
-    if h4 == h1 == "BEARISH" and m15 == "BULLISH":
-        return "HTF_BEARISH_LTF_PULLBACK"
-
-    if h1 == m15 and h1 in DIRECTIONAL_BIASES and h1 != h4:
-        return "LTF_REVERSAL_ATTEMPT"
-
-    return "MIXED_CONFLICT"
-
-
-def _trade_preference(
-    alignment_state: str,
-    signals: dict[str, dict],
-    broad_context: dict,
-) -> dict:
-    broad_direction = broad_context.get("direction", "UNDETERMINED")
-
-    if alignment_state == "FULL_BULLISH_ALIGNMENT":
-        preference = {
-            "direction": "LONG",
-            "mode": "WITH_INTRADAY_TREND",
-            "requires_entry_confirmation": True,
-            "reason": "4h, 1h, 15m and 1m are bullish; a fresh 1m trigger is still required.",
-        }
-    elif alignment_state == "FULL_BEARISH_ALIGNMENT":
-        preference = {
-            "direction": "SHORT",
-            "mode": "WITH_INTRADAY_TREND",
-            "requires_entry_confirmation": True,
-            "reason": "4h, 1h, 15m and 1m are bearish; a fresh 1m trigger is still required.",
-        }
-    elif alignment_state == "HTF_BULLISH_LTF_PULLBACK":
-        preference = {
-            "direction": "LONG",
-            "mode": "WAIT_FOR_BULLISH_ENTRY_CONFIRMATION",
-            "requires_entry_confirmation": True,
-            "reason": "Higher trading timeframes are bullish while a lower timeframe is pulling back.",
-        }
-    elif alignment_state == "HTF_BEARISH_LTF_PULLBACK":
-        preference = {
-            "direction": "SHORT",
-            "mode": "WAIT_FOR_BEARISH_ENTRY_CONFIRMATION",
-            "requires_entry_confirmation": True,
-            "reason": "Higher trading timeframes are bearish while a lower timeframe is pulling back.",
-        }
-    elif alignment_state == "LTF_REVERSAL_ATTEMPT":
-        attempted_direction = signals["15m"]["primary_direction"]
-        return {
-            "direction": "WAIT",
-            "mode": "REVERSAL_NOT_CONFIRMED_BY_4H",
-            "requires_entry_confirmation": True,
-            "possible_reversal_direction": attempted_direction,
-            "broad_context_direction": broad_direction,
-            "broad_context_caution": True,
-            "reason": "1h and 15m oppose 4h; treat this as an attempt, not an established reversal.",
-        }
-    elif alignment_state == "INSUFFICIENT_DATA":
-        return {
-            "direction": "UNDETERMINED",
-            "mode": "NO_RELIABLE_HIERARCHY",
-            "requires_entry_confirmation": True,
-            "broad_context_direction": broad_direction,
-            "broad_context_caution": True,
-            "reason": "At least one core timeframe has no directional state.",
-        }
-    else:
-        return {
-            "direction": "WAIT",
-            "mode": "CONFLICTING_TIMEFRAMES",
-            "requires_entry_confirmation": True,
-            "broad_context_direction": broad_direction,
-            "broad_context_caution": True,
-            "reason": "4h, 1h and 15m do not form a clean hierarchy.",
-        }
-
-    preferred_bias = {
-        "LONG": "BULLISH",
-        "SHORT": "BEARISH",
-    }[preference["direction"]]
-    counter_broad_context = (
-        broad_direction in DIRECTIONAL_BIASES
-        and broad_direction != preferred_bias
-    )
-
-    preference["broad_context_direction"] = broad_direction
-    preference["broad_context_caution"] = (
-        counter_broad_context or broad_direction in {"MIXED", "UNDETERMINED"}
-    )
-
-    if counter_broad_context:
-        if preference["mode"].startswith("WAIT_FOR_"):
-            preference["mode"] += "_COUNTER_BROAD_CONTEXT"
-        else:
-            preference["mode"] = (
-                "INTRADAY_DIRECTION_COUNTER_BROAD_CONTEXT"
-            )
-        preference["requires_entry_confirmation"] = True
-        preference["reason"] += (
-            " Daily/weekly context is opposite, so conviction must be reduced."
-        )
-
-    return preference
-
-
-def _execution_state(
-    preference: dict,
-    entry_signal: dict,
-) -> dict:
-    preferred_direction = {
-        "LONG": "BULLISH",
-        "SHORT": "BEARISH",
-    }.get(preference.get("direction"))
-
-    entry_direction = entry_signal["primary_direction"]
-    trigger = entry_signal["latest_trigger"]
-
-    if preferred_direction is None:
-        relation = "NOT_APPLICABLE"
-        state = "NO_DIRECTIONAL_PREFERENCE"
-    elif entry_direction == preferred_direction:
-        relation = "ALIGNED"
-        if (
-            trigger["is_fresh"]
-            and trigger["direction"] == preferred_direction
-            and trigger["type"] in {"C3_CONFIRMED", "C2_CONFIRMED_BY_C3"}
-        ):
-            state = "FRESH_ENTRY_CONFIRMATION"
-        elif (
-            trigger["is_fresh"]
-            and trigger["direction"] == preferred_direction
-            and trigger["type"] == "C2_UNCONFIRMED"
-        ):
-            state = "WAITING_FOR_C3_CONFIRMATION"
-        else:
-            state = "ENTRY_BIAS_ALIGNED_NO_FRESH_TRIGGER"
-    elif entry_direction in DIRECTIONAL_BIASES:
-        relation = "OPPOSED"
-        state = "ENTRY_TIMEFRAME_OPPOSED"
-    else:
-        relation = "UNDETERMINED"
-        state = "ENTRY_TIMEFRAME_UNDETERMINED"
-
-    return {
-        "state": state,
-        "preferred_direction": preferred_direction or "NONE",
-        "entry_timeframe_direction": entry_direction,
-        "relation_to_preference": relation,
-        "latest_entry_trigger": trigger,
-    }
-
-
-def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
-    signals = {
-        timeframe: _timeframe_signal(timeframe, timeframes.get(timeframe))
-        for timeframe in MTF_ROLE_MAP
-    }
-
-    broad_context = _consensus(signals, ["1w", "1d"])
-    htf_bias = _single_bias(signals, "4h")
-    htf_bias["broad_context_direction"] = broad_context["direction"]
-    htf_bias["relation_to_broad_context"] = (
-        "ALIGNED"
-        if broad_context["direction"] == htf_bias["direction"]
-        and htf_bias["direction"] in DIRECTIONAL_BIASES
-        else "COUNTER_CONTEXT"
-        if broad_context["direction"] in DIRECTIONAL_BIASES
-        and htf_bias["direction"] in DIRECTIONAL_BIASES
-        and broad_context["direction"] != htf_bias["direction"]
-        else "MIXED_OR_UNDETERMINED"
-    )
-
-    alignment = _alignment_state(signals)
-    preference = _trade_preference(alignment, signals, broad_context)
-    execution = _execution_state(preference, signals["1m"])
-
-    conflicts = []
-    for timeframe, signal in signals.items():
-        for conflict in signal["internal_conflicts"]:
-            conflicts.append(
-                {
-                    "scope": "INTERNAL_TIMEFRAME",
-                    "timeframe": timeframe,
-                    "type": conflict,
-                }
-            )
-
-    for higher, lower in [
-        ("1w", "1d"),
-        ("1d", "4h"),
-        ("4h", "1h"),
-        ("1h", "15m"),
-        ("15m", "1m"),
-    ]:
-        higher_direction = signals[higher]["primary_direction"]
-        lower_direction = signals[lower]["primary_direction"]
-        if (
-            higher_direction in DIRECTIONAL_BIASES
-            and lower_direction in DIRECTIONAL_BIASES
-            and higher_direction != lower_direction
-        ):
-            conflicts.append(
-                {
-                    "scope": "BETWEEN_TIMEFRAMES",
-                    "higher_timeframe": higher,
-                    "higher_direction": higher_direction,
-                    "lower_timeframe": lower,
-                    "lower_direction": lower_direction,
-                    "type": "DIRECTIONAL_DISAGREEMENT",
-                }
-            )
-
-    complete = all(
-        signal["primary_direction"] in DIRECTIONAL_BIASES
-        for signal in signals.values()
-    )
-
-    return {
-        "status": "ok" if complete else "partial",
-        "method": "deterministic_mtf_hierarchy_v2",
-        "closed_candles_only_for_structure": True,
-        "role_map": MTF_ROLE_MAP,
-        "priority_rule": [
-            "CONFIRMED_STRUCTURE",
-            "EFFECTIVE_CISD",
-            "SWING_SEQUENCE",
-            "C2_C3_TRIGGER_ONLY",
-        ],
-        "timeframe_signals": signals,
-        "broad_context_bias": broad_context,
-        "higher_timeframe_bias": htf_bias,
-        "session_timeframe_bias": _single_bias(signals, "1h"),
-        "hourly_closure_phase": signals["1h"].get("closure_sequence"),
-        "hourly_opposite_closure_warning": signals["1h"].get(
-            "opposite_closure_to_primary_direction"
-        ),
-        "setup_timeframe_bias": _single_bias(signals, "15m"),
-        "entry_timeframe_bias": _single_bias(signals, "1m"),
-        "alignment_scope": ["4h", "1h", "15m", "1m"],
-        "broad_context_excluded_from_alignment_state": True,
-        "alignment_state": alignment,
-        "trade_direction_preference": preference,
-        "execution_state": execution,
-        "conflicts": conflicts,
-        "scope_note": (
-            "This hierarchy organizes context. It does not create an automatic trade entry; "
-            "fresh 1m confirmation and risk control remain required."
-        ),
-    }
-
-
 def build_higher_timeframe_levels(
     raw_candles: dict[str, list[dict]],
     now: int,
@@ -1782,8 +1322,7 @@ def build(symbol: str) -> dict:
     for timeframe, (_, seconds, _) in TIMEFRAMES.items():
         raw = raw_candles[timeframe]
         closed, live = split_closed_and_live(raw, seconds, now)
-        candle2, candle3, sweep_displacement = detect(closed)
-        sequence = closure_sequence_summary(closed, candle2, candle3)
+        candle2, candle3 = detect(closed)
 
         timeframes[timeframe] = {
             "seconds_per_candle": seconds,
@@ -1792,8 +1331,6 @@ def build(symbol: str) -> dict:
             "recent_closed_candles": closed[-40:],
             "recent_candle2": candle2[-20:],
             "recent_candle3": candle3[-20:],
-            "recent_sweep_displacement": sweep_displacement[-20:],
-            "closure_sequence": sequence,
             "swing_points": swing_summary(
                 closed,
                 ticker_data.get("lastPrice"),
@@ -1808,15 +1345,9 @@ def build(symbol: str) -> dict:
     return {
         "ok": True,
         "source": "MEXC Futures public API",
-        "mode": "enhanced_snapshot_v6",
-        "version": "6.3-closure-sequence",
+        "mode": "enhanced_snapshot_v5_1",
+        "version": "5.1-directional-protection-effective-cisd",
         "symbol": symbol,
-        "analysis_role": (
-            "MARKET_CONTEXT"
-            if symbol == "BTC_USDT"
-            else "TRADE_CANDIDATE"
-        ),
-        "eligible_trade_candidate": symbol != "BTC_USDT",
         "supported_symbols": sorted(SUPPORTED_SYMBOLS),
         "fetched_at_unix": now,
         "fetched_at_utc": utc(now),
@@ -1827,7 +1358,6 @@ def build(symbol: str) -> dict:
             "reversal_filter_enabled": True,
             "filter_length": FILTER_LENGTH,
             "wick_percent": WICK_PERCENT,
-            "btc_role": "MARKET_CONTEXT_NOT_TRADE_CANDIDATE",
             "timeframes": list(TIMEFRAMES.keys()),
             "swing_detection": {
                 "method": "confirmed_fractal",
@@ -1841,14 +1371,12 @@ def build(symbol: str) -> dict:
                 "bos_choch_not_calculated_yet": False,
                 "protected_high_low_enabled": True,
                 "conservative_cisd_enabled": True,
-                "mtf_hierarchy_enabled": True,
             },
         },
         "higher_timeframe_levels": build_higher_timeframe_levels(
             raw_candles,
             now,
         ),
-        "mtf_hierarchy": build_mtf_hierarchy(timeframes),
         "timeframes": timeframes,
     }
 
