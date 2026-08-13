@@ -7,7 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const SERVER_VERSION = "1.2.0";
+const SERVER_VERSION = "1.2.1";
 const CONTROLS_URI = "ui://swisser/market-controls-v3.html";
 const LEGACY_CONTROLS_URIS = [
   "ui://swisser/market-controls-v2.html",
@@ -195,6 +195,7 @@ export function createSwisserMcpServer() {
       "SWISSER анализирует MEXC Futures. Сначала используй scan_swisser_markets для всех монет, " +
       "затем get_swisser_market_snapshot только для достойных кандидатов. При первой активации " +
       "вызови open_swisser_controls: панель сама запросит постоянный PiP-режим. Не открывай её повторно " +
+      "после каждого ответа, пока она активна; повтори вызов только по просьбе пользователя. " +
       "Текущую сделку называй по active_trade_scenario ядра 1h→15m→1m; continuation_bias и 4h — " +
       "контекст, а не активный " +
       "LONG/SHORT. Не выдумывай отсутствующие уровни.",
