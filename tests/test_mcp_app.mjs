@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 
-import handler, { COMMANDS } from "../api/mcp.js";
+import handler, { COMMAND_LABELS, COMMANDS } from "../api/mcp.js";
 
 async function startServer() {
   const server = http.createServer(handler);
@@ -47,7 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.3.0");
+  assert.equal(initialized.result.serverInfo.version, "1.4.0");
   assert.deepEqual(initialized.result.serverInfo.icons, [
     {
       src: "https://tao-mexc-live.vercel.app/swisser-icon.svg",
@@ -64,7 +64,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   ]);
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls.html",
+    "ui://swisser/market-controls-v4.html",
   );
 
   const called = await rpc(url, 3, "tools/call", {
@@ -77,7 +77,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
 
   const resources = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls.html",
+    uri: "ui://swisser/market-controls-v4.html",
   });
   const html = resources.result.contents[0].text;
   for (const command of COMMANDS) assert.match(html, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -85,14 +85,18 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.match(html, /requestDisplayMode\(\{ mode: "pip" \}\)/);
   assert.match(html, /requestAnimationFrame\(\(\) => requestPip\(\)\)/);
   assert.match(html, /openai:set_globals/);
-  assert.match(html, /Обновить рынок/);
-  assert.match(html, /Лучшие сделки/);
-  assert.match(html, /Что близко к входу/);
+  for (const label of COMMAND_LABELS) assert.match(html, new RegExp(label));
+  assert.match(COMMANDS[0], /только общий scanner/);
+  assert.match(COMMANDS[0], /без подробных snapshot и новостей/);
+  assert.match(COMMANDS[1], /snapshot всех действительно подходящих кандидатов/);
+  assert.match(COMMANDS[1], /без жёсткого лимита/);
+  assert.match(COMMANDS[2], /близко к формированию в ближайшие часы/);
+  assert.match(COMMANDS[2], /только когда есть действительно значимое событие/);
   assert.doesNotMatch(html, /#36a269|#238a55/);
 
   const listedResources = await rpc(url, 5, "resources/list");
   assert.deepEqual(
     listedResources.result.resources.map((resource) => resource.uri),
-    ["ui://swisser/market-controls.html"],
+    ["ui://swisser/market-controls-v4.html"],
   );
 });
