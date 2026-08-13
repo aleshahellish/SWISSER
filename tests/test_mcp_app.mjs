@@ -47,7 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.1.0");
+  assert.equal(initialized.result.serverInfo.version, "1.1.1");
 
   const tools = await rpc(url, 2, "tools/list");
   assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
@@ -78,4 +78,10 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.match(html, /requestDisplayMode\(\{ mode: "pip" \}\)/);
   assert.match(html, /requestAnimationFrame\(\(\) => requestPip\(\)\)/);
   assert.match(html, /openai:set_globals/);
+
+  const legacyResources = await rpc(url, 5, "resources/read", {
+    uri: "ui://swisser/market-controls-v1.html",
+  });
+  assert.equal(legacyResources.result.contents[0].mimeType, "text/html;profile=mcp-app");
+  assert.match(legacyResources.result.contents[0].text, /SWISSER · РЫНОК/);
 });
