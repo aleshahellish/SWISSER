@@ -49,9 +49,13 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
 
   const tools = await rpc(url, 2, "tools/list");
-  assert.deepEqual(tools.result.tools.map((tool) => tool.name), ["open_swisser_controls"]);
+  assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
+    "scan_swisser_markets",
+    "get_swisser_market_snapshot",
+    "open_swisser_controls",
+  ]);
   assert.equal(
-    tools.result.tools[0]._meta["openai/outputTemplate"],
+    tools.result.tools[2]._meta["openai/outputTemplate"],
     "ui://swisser/market-controls-v1.html",
   );
 

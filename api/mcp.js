@@ -5,9 +5,20 @@ import {
 } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
 
 const SERVER_VERSION = "1.0.0";
 const CONTROLS_URI = "ui://swisser/market-controls-v1.html";
+const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
+const SUPPORTED_SYMBOLS = [
+  "TAO_USDT",
+  "HYPE_USDT",
+  "SOL_USDT",
+  "XRP_USDT",
+  "DOGE_USDT",
+  "ETH_USDT",
+  "BTC_USDT",
+];
 
 export const COMMANDS = [
   "Обнови рынок. Кратко дай сводку.",
@@ -90,11 +101,91 @@ const controlsHtml = `<!doctype html>
 </body>
 </html>`;
 
+async function fetchSwisser(path, params) {
+  const url = new URL(path, API_BASE);
+  url.searchParams.set("nocache", String(Date.now()));
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  const response = await fetch(url, {
+    headers: { accept: "application/json", "user-agent": "SWISSER-MCP/1.0" },
+    signal: AbortSignal.timeout(58_000),
+  });
+  if (!response.ok) throw new Error(`SWISSER API returned HTTP ${response.status}`);
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("SWISSER API returned a non-JSON response");
+  }
+  return response.json();
+}
+
 export function createSwisserMcpServer() {
   const server = new McpServer({
     name: "swisser-market-controls",
     version: SERVER_VERSION,
+  }, {
+    instructions:
+      "SWISSER анализирует MEXC Futures. Сначала используй scan_swisser_markets для всех монет, " +
+      "затем get_swisser_market_snapshot только для достойных кандидатов. После рыночного ответа " +
+      "вызови open_swisser_controls, чтобы снова показать три кнопки. Не выдумывай отсутствующие уровни.",
   });
+
+  server.registerTool(
+    "scan_swisser_markets",
+    {
+      title: "Сканировать рынок SWISSER",
+      description:
+        "Получает компактный актуальный scanner по TAO, HYPE, SOL, XRP, DOGE и ETH; BTC используется только как рыночный контекст. " +
+        "Всегда начинай рыночный запрос с этого инструмента. Пустой список означает полный скан всех семи символов.",
+      inputSchema: {
+        symbols: z
+          .array(z.enum(SUPPORTED_SYMBOLS))
+          .optional()
+          .describe("Необязательный список символов. По умолчанию сканируются все поддерживаемые монеты."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ symbols }) => {
+      const data = await fetchSwisser("/api/scanner_action_v6", {
+        symbols: symbols?.length ? symbols.join(",") : undefined,
+      });
+      return {
+        content: [{ type: "text", text: "Актуальный SWISSER scanner получен. Используй полный structuredContent для сравнения кандидатов." }],
+        structuredContent: data,
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_swisser_market_snapshot",
+    {
+      title: "Проверить кандидата SWISSER",
+      description:
+        "Получает подробный актуальный snapshot одной монеты после первичного scanner. " +
+        "Используй для подтверждения структуры, входа, отмены, целей, RR и потенциального PnL выбранного кандидата.",
+      inputSchema: {
+        symbol: z.enum(SUPPORTED_SYMBOLS).describe("Символ кандидата, например TAO_USDT."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ symbol }) => {
+      const data = await fetchSwisser("/api/snapshot_action_v6", { symbol });
+      return {
+        content: [{ type: "text", text: `Подробный SWISSER snapshot ${symbol} получен. Используй полный structuredContent.` }],
+        structuredContent: data,
+      };
+    },
+  );
 
   registerAppTool(
     server,
