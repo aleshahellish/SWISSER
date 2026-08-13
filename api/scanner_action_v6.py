@@ -1047,10 +1047,7 @@ def _compact_lux_event(event):
         "event_type": event.get("event_type"),
         "direction": event.get("direction"),
         "time": event.get("time"),
-        "time_utc": event.get("time_utc"),
-        "close": event.get("close"),
         "broken_level": pivot.get("level"),
-        "broken_pivot_time": pivot.get("time"),
     }
 
 
@@ -1059,21 +1056,14 @@ def _compact_lux_layer(layer):
         return None
 
     return {
-        "length": layer.get("length"),
         "current_direction": layer.get("current_direction"),
-        "current_high": {
-            key: (layer.get("current_high") or {}).get(key)
-            for key in ("level", "time", "time_utc", "crossed")
-        },
-        "current_low": {
-            key: (layer.get("current_low") or {}).get(key)
-            for key in ("level", "time", "time_utc", "crossed")
-        },
+        "current_high_level": (
+            (layer.get("current_high") or {}).get("level")
+        ),
+        "current_low_level": (
+            (layer.get("current_low") or {}).get("level")
+        ),
         "latest_event": _compact_lux_event(layer.get("latest_event")),
-        "recent_events": [
-            _compact_lux_event(event)
-            for event in (layer.get("recent_events") or [])[-4:]
-        ],
     }
 
 
@@ -1082,10 +1072,25 @@ def _compact_lux_structure(structure):
         return None
 
     return {
-        "method": structure.get("method"),
-        "settings": structure.get("settings"),
         "internal": _compact_lux_layer(structure.get("internal")),
         "swing": _compact_lux_layer(structure.get("swing")),
+    }
+
+
+def _compact_displacement(event):
+    if not isinstance(event, dict):
+        return None
+
+    return {
+        key: event.get(key)
+        for key in (
+            "type",
+            "direction",
+            "time",
+            "time_utc",
+            "swept_side",
+            "closed_beyond",
+        )
     }
 
 
@@ -1308,7 +1313,12 @@ def compact_for_gpt_action(full_result: dict) -> dict:
                     "opposite_closure_to_primary_direction"
                 ),
                 "latest_sweep_displacement": (
-                    (block.get("recent_sweep_displacement") or [None])[-1]
+                    _compact_displacement(
+                        (
+                            block.get("recent_sweep_displacement")
+                            or [None]
+                        )[-1]
+                    )
                 ),
                 "latest_closed_candle": _compact_closed_candle(
                     block.get("latest_closed_candle")

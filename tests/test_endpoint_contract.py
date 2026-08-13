@@ -171,13 +171,29 @@ class EndpointContractTests(unittest.TestCase):
             self.assertNotIn("current_cisd_direction", block)
             self.assertNotIn("latest_structure_break", block)
             self.assertEqual(
-                block["luxalgo_structure"]["settings"],
-                {
-                    "internal_length": 5,
-                    "swing_length": 50,
-                    "confluence_filter": False,
-                },
+                set(block["luxalgo_structure"]),
+                {"internal", "swing"},
             )
+            for layer in ("internal", "swing"):
+                compact_layer = block["luxalgo_structure"][layer]
+                self.assertIn("current_direction", compact_layer)
+                self.assertIn("current_high_level", compact_layer)
+                self.assertIn("current_low_level", compact_layer)
+                self.assertIn("latest_event", compact_layer)
+                self.assertNotIn("recent_events", compact_layer)
+            displacement = block["latest_sweep_displacement"]
+            if displacement is not None:
+                self.assertEqual(
+                    set(displacement),
+                    {
+                        "type",
+                        "direction",
+                        "time",
+                        "time_utc",
+                        "swept_side",
+                        "closed_beyond",
+                    },
+                )
         encoded = scanner_action_v6.encode_gpt_action_payload(compact)
         self.assertLess(
             len(encoded.decode("utf-8")),
