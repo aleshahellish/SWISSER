@@ -49,9 +49,10 @@ python3 -m py_compile candle_closure.py api/*.py
 python3 -m unittest discover -s tests -v
 ```
 
-Плотная тестовая выборка даёт примерно 62 000 символов для общего scanner и
-69 000 для подробного snapshot при официальном лимите GPT Actions менее
-100 000 символов.
+Плотная тестовая выборка даёт около 57 000 символов для общего scanner, а
+фактическая production-проверка всех семи монет — около 70 000. Подробный
+snapshot также остаётся ниже безопасной цели 80 000 при официальном лимите
+GPT Actions менее 100 000 символов.
 
 ## Активные Vercel Functions
 
@@ -61,5 +62,6 @@ python3 -m unittest discover -s tests -v
 - `api/snapshot_v6.py`
 - `api/snapshot_action_v6.py`
 
-Модуль `candle_closure.py` лежит в корне и не создаёт отдельную функцию.
-Оригинальный репозиторий до правок сохранён в `rollback/`.
+Модули `candle_closure.py` и `luxalgo_structure.py` лежат в корне и не создают
+отдельных функций. Откат выполняется через историю Git; дополнительная
+страховочная ветка `stable-v1` сохранена отдельно от production-ветки `main`.
