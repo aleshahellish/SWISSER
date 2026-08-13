@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MEXC Live Market Data",
-    "description": "Компактные GPT Action endpoints для MEXC Futures: shortlist, подробная проверка, C2/C3/EQ и фазы H1 C2-C5.",
-    "version": "6.3.1"
+    "description": "Компактные GPT Action endpoints для MEXC Futures: LuxAlgo internal/swing, MTF-контекст, C2/C3/EQ и фазы H1 C2-C5.",
+    "version": "6.4.0"
   },
   "servers": [
     {
@@ -183,32 +183,32 @@
                             "properties": {
                               "1m": {
                                 "type": "object",
-                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                                 "additionalProperties": true
                               },
                               "15m": {
                                 "type": "object",
-                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                                 "additionalProperties": true
                               },
                               "1h": {
                                 "type": "object",
-                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                                 "additionalProperties": true
                               },
                               "4h": {
                                 "type": "object",
-                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                                 "additionalProperties": true
                               },
                               "1d": {
                                 "type": "object",
-                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                                 "additionalProperties": true
                               },
                               "1w": {
                                 "type": "object",
-                                "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                                "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                                 "additionalProperties": true
                               }
                             },
@@ -231,7 +231,7 @@
       "get": {
         "operationId": "getMexcMarketSnapshot",
         "summary": "Получить компактный подробный снимок одной монеты",
-        "description": "Обязательная подробная перепроверка выбранной монеты: C2/C3/EQ, H1 C2-C5, структура, CISD и конфликты. Визуальные POI/FVG/OB и финальный вход Action не подтверждает.",
+        "description": "Обязательная подробная перепроверка выбранной монеты: LuxAlgo internal как рабочее направление, LuxAlgo swing как стратегический контекст, их конфликты, C2/C3/EQ и H1 C2-C5. Legacy 2/2, protected structure и CISD не используются. Визуальные POI/FVG/OB и финальный вход Action не подтверждает.",
         "x-openai-isConsequential": false,
         "parameters": [
           {
@@ -303,6 +303,11 @@
                     },
                     "higher_timeframe_levels": {
                       "type": "object",
+                      "additionalProperties": true
+                    },
+                    "structure_policy": {
+                      "type": "object",
+                      "description": "LuxAlgo internal — рабочее направление ТФ; LuxAlgo swing — стратегический контекст; legacy fractal 2/2 отключён.",
                       "additionalProperties": true
                     },
                     "mtf_hierarchy": {
@@ -378,32 +383,32 @@
                       "properties": {
                         "1m": {
                           "type": "object",
-                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                           "additionalProperties": true
                         },
                         "15m": {
                           "type": "object",
-                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                           "additionalProperties": true
                         },
                         "1h": {
                           "type": "object",
-                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                           "additionalProperties": true
                         },
                         "4h": {
                           "type": "object",
-                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                           "additionalProperties": true
                         },
                         "1d": {
                           "type": "object",
-                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                           "additionalProperties": true
                         },
                         "1w": {
                           "type": "object",
-                          "description": "Данные таймфрейма: свечи, C2/C3, swing points, структура BOS/CHOCH, protected high/low и CISD.",
+                          "description": "Закрытые свечи, LuxAlgo internal/swing и отдельные C2/C3-триггеры; legacy 2/2, protected structure и CISD отсутствуют.",
                           "additionalProperties": true
                         }
                       },
