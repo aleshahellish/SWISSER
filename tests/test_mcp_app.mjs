@@ -47,7 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.2.0");
+  assert.equal(initialized.result.serverInfo.version, "1.2.1");
 
   const tools = await rpc(url, 2, "tools/list");
   assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
