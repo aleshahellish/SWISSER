@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 from candle_closure import closure_sequence_summary, detect_candle_closures
+from luxalgo_structure import luxalgo_market_structure
 
 
 BASE = "https://api.mexc.com"
@@ -19,6 +20,7 @@ WICK_PERCENT = 40
 SWING_LEFT_BARS = 2
 SWING_RIGHT_BARS = 2
 SWING_RECENT_LIMIT = 8
+LUX_STRUCTURE_RECENT_LIMIT = 20
 
 TIMEFRAMES = {
     "1m": ("Min1", 60, 300),
@@ -1802,6 +1804,10 @@ def build(symbol: str) -> dict:
                 closed,
                 ticker_data.get("lastPrice"),
             ),
+            "luxalgo_structure": luxalgo_market_structure(
+                closed,
+                recent_limit=LUX_STRUCTURE_RECENT_LIMIT,
+            ),
             "protected_structure": protected_structure_summary(closed),
         }
 
@@ -1834,6 +1840,13 @@ def build(symbol: str) -> dict:
                 "left_bars": SWING_LEFT_BARS,
                 "right_bars": SWING_RIGHT_BARS,
                 "confirmed_only": True,
+            },
+            "luxalgo_smc_structure": {
+                "internal_length": 5,
+                "swing_length": 50,
+                "confluence_filter": False,
+                "break_confirmation": "CLOSE_CROSS",
+                "role": "REFERENCE_STRUCTURE",
             },
             "swing_level_state": {
                 "closed_candles_only": True,

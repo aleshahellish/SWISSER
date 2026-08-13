@@ -165,6 +165,16 @@ class EndpointContractTests(unittest.TestCase):
             "hourly_closure_phase",
             by_symbol["HYPE_USDT"]["mtf_hierarchy"],
         )
+        for block in by_symbol["HYPE_USDT"]["timeframe_summary"].values():
+            self.assertIn("luxalgo_structure", block)
+            self.assertEqual(
+                block["luxalgo_structure"]["settings"],
+                {
+                    "internal_length": 5,
+                    "swing_length": 50,
+                    "confluence_filter": False,
+                },
+            )
         encoded = scanner_action_v6.encode_gpt_action_payload(compact)
         self.assertLess(
             len(encoded.decode("utf-8")),
@@ -199,6 +209,9 @@ class EndpointContractTests(unittest.TestCase):
         for block in compact["timeframes"].values():
             self.assertIn("closure_sequence", block)
             self.assertIn("recent_sweep_displacement", block)
+            self.assertIn("luxalgo_structure", block)
+            self.assertIn("internal", block["luxalgo_structure"])
+            self.assertIn("swing", block["luxalgo_structure"])
         encoded = snapshot_action_v6.encode_gpt_action_payload(compact)
         self.assertLess(
             len(encoded.decode("utf-8")),

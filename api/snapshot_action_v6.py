@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 from candle_closure import closure_sequence_summary, detect_candle_closures
+from luxalgo_structure import luxalgo_market_structure
 
 
 BASE = "https://api.mexc.com"
@@ -19,6 +20,7 @@ WICK_PERCENT = 40
 SWING_LEFT_BARS = 2
 SWING_RIGHT_BARS = 2
 SWING_RECENT_LIMIT = 8
+LUX_STRUCTURE_RECENT_LIMIT = 20
 GPT_ACTION_CHARACTER_LIMIT = 100_000
 GPT_ACTION_SAFE_TARGET = 80_000
 
@@ -1804,6 +1806,10 @@ def build(symbol: str) -> dict:
                 closed,
                 ticker_data.get("lastPrice"),
             ),
+            "luxalgo_structure": luxalgo_market_structure(
+                closed,
+                recent_limit=LUX_STRUCTURE_RECENT_LIMIT,
+            ),
             "protected_structure": protected_structure_summary(closed),
         }
 
@@ -1836,6 +1842,13 @@ def build(symbol: str) -> dict:
                 "left_bars": SWING_LEFT_BARS,
                 "right_bars": SWING_RIGHT_BARS,
                 "confirmed_only": True,
+            },
+            "luxalgo_smc_structure": {
+                "internal_length": 5,
+                "swing_length": 50,
+                "confluence_filter": False,
+                "break_confirmation": "CLOSE_CROSS",
+                "role": "REFERENCE_STRUCTURE",
             },
             "swing_level_state": {
                 "closed_candles_only": True,
@@ -1915,6 +1928,49 @@ def _action_break(event):
             "level": protected.get("level"),
             "current_state": protected.get("current_state"),
         },
+    }
+
+
+def _action_lux_event(event):
+    if not isinstance(event, dict):
+        return None
+
+    pivot = event.get("broken_pivot") or {}
+    return {
+        "event_type": event.get("event_type"),
+        "direction": event.get("direction"),
+        "time": event.get("time"),
+        "time_utc": event.get("time_utc"),
+        "close": event.get("close"),
+        "broken_level": pivot.get("level"),
+        "broken_pivot_time": pivot.get("time"),
+    }
+
+
+def _action_lux_layer(layer):
+    if not isinstance(layer, dict):
+        return None
+
+    return {
+        "length": layer.get("length"),
+        "current_direction": layer.get("current_direction"),
+        "latest_event": _action_lux_event(layer.get("latest_event")),
+        "recent_events": [
+            _action_lux_event(event)
+            for event in (layer.get("recent_events") or [])[-6:]
+        ],
+    }
+
+
+def _action_lux_structure(structure):
+    if not isinstance(structure, dict):
+        return None
+
+    return {
+        "method": structure.get("method"),
+        "settings": structure.get("settings"),
+        "internal": _action_lux_layer(structure.get("internal")),
+        "swing": _action_lux_layer(structure.get("swing")),
     }
 
 
@@ -2151,6 +2207,9 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
         low_sequence = swing_structure.get("low_sequence") or {}
 
         output["timeframes"][timeframe] = {
+            "luxalgo_structure": _action_lux_structure(
+                block.get("luxalgo_structure")
+            ),
             "seconds_per_candle": block.get(
                 "seconds_per_candle"
             ),

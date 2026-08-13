@@ -2,6 +2,12 @@ from datetime import datetime, timezone
 import unittest
 
 from luxalgo_structure import luxalgo_market_structure
+from api import (
+    scanner_action_v6,
+    scanner_v6,
+    snapshot_action_v6,
+    snapshot_v6,
+)
 
 
 def candle(index, open_price, high, low, close):
@@ -84,6 +90,18 @@ class LuxAlgoStructureTests(unittest.TestCase):
                 "swing_events": "ALL",
                 "break_confirmation": "CLOSE_CROSS",
             },
+        )
+
+    def test_all_four_endpoints_share_the_same_luxalgo_detector(self):
+        self.assertIs(scanner_v6.luxalgo_market_structure, luxalgo_market_structure)
+        self.assertIs(
+            scanner_action_v6.luxalgo_market_structure,
+            luxalgo_market_structure,
+        )
+        self.assertIs(snapshot_v6.luxalgo_market_structure, luxalgo_market_structure)
+        self.assertIs(
+            snapshot_action_v6.luxalgo_market_structure,
+            luxalgo_market_structure,
         )
 
 

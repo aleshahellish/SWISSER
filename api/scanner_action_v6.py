@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 from candle_closure import closure_sequence_summary, detect_candle_closures
+from luxalgo_structure import luxalgo_market_structure
 
 
 BASE = "https://api.mexc.com"
@@ -21,16 +22,17 @@ WICK_PERCENT = 40
 SWING_LEFT_BARS = 2
 SWING_RIGHT_BARS = 2
 SWING_RECENT_LIMIT = 3
+LUX_STRUCTURE_RECENT_LIMIT = 8
 GPT_ACTION_CHARACTER_LIMIT = 100_000
 GPT_ACTION_SAFE_TARGET = 80_000
 
 TIMEFRAMES = {
-    "1m": ("Min1", 60, 80),
-    "15m": ("Min15", 900, 80),
-    "1h": ("Min60", 3600, 80),
-    "4h": ("Hour4", 14400, 80),
-    "1d": ("Day1", 86400, 80),
-    "1w": ("Week1", 604800, 60),
+    "1m": ("Min1", 60, 300),
+    "15m": ("Min15", 900, 300),
+    "1h": ("Min60", 3600, 300),
+    "4h": ("Hour4", 14400, 300),
+    "1d": ("Day1", 86400, 180),
+    "1w": ("Week1", 604800, 104),
 }
 
 SUPPORTED_SYMBOLS = (
@@ -1247,6 +1249,10 @@ def summarize_timeframe(
             closed,
             current_price,
         ),
+        "luxalgo_structure": luxalgo_market_structure(
+            closed,
+            recent_limit=LUX_STRUCTURE_RECENT_LIMIT,
+        ),
         "protected_structure": protected_structure_summary(closed),
     }
 
@@ -2004,6 +2010,13 @@ def build(path: str) -> dict:
                 "right_bars": SWING_RIGHT_BARS,
                 "confirmed_only": True,
             },
+            "luxalgo_smc_structure": {
+                "internal_length": 5,
+                "swing_length": 50,
+                "confluence_filter": False,
+                "break_confirmation": "CLOSE_CROSS",
+                "role": "REFERENCE_STRUCTURE",
+            },
             "swing_level_state": {
                 "closed_candles_only": True,
                 "outside_bars_excluded_from_sequence": True,
@@ -2032,6 +2045,49 @@ def _compact_structure_break(event):
         "broken_swing_type": broken_swing.get("type"),
         "broken_swing_level": broken_swing.get("level"),
         "break_close": break_candle.get("close"),
+    }
+
+
+def _compact_lux_event(event):
+    if not isinstance(event, dict):
+        return None
+
+    pivot = event.get("broken_pivot") or {}
+    return {
+        "event_type": event.get("event_type"),
+        "direction": event.get("direction"),
+        "time": event.get("time"),
+        "time_utc": event.get("time_utc"),
+        "close": event.get("close"),
+        "broken_level": pivot.get("level"),
+        "broken_pivot_time": pivot.get("time"),
+    }
+
+
+def _compact_lux_layer(layer):
+    if not isinstance(layer, dict):
+        return None
+
+    return {
+        "length": layer.get("length"),
+        "current_direction": layer.get("current_direction"),
+        "latest_event": _compact_lux_event(layer.get("latest_event")),
+        "recent_events": [
+            _compact_lux_event(event)
+            for event in (layer.get("recent_events") or [])[-4:]
+        ],
+    }
+
+
+def _compact_lux_structure(structure):
+    if not isinstance(structure, dict):
+        return None
+
+    return {
+        "method": structure.get("method"),
+        "settings": structure.get("settings"),
+        "internal": _compact_lux_layer(structure.get("internal")),
+        "swing": _compact_lux_layer(structure.get("swing")),
     }
 
 
@@ -2267,6 +2323,9 @@ def compact_for_gpt_action(full_result: dict) -> dict:
             signal = signals.get(timeframe) or {}
 
             compact_item["timeframe_summary"][timeframe] = {
+                "luxalgo_structure": _compact_lux_structure(
+                    block.get("luxalgo_structure")
+                ),
                 "primary_direction": signal.get(
                     "primary_direction"
                 ),
