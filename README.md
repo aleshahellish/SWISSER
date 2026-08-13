@@ -6,6 +6,10 @@ SWISSER получает закрытые свечи MEXC Futures и строи�
 1. `/api/scanner_action_v6` — общий shortlist.
 2. `/api/snapshot_action_v6?symbol=HYPE_USDT` — подробная проверка кандидата.
 
+Дополнительно `/mcp` предоставляет ChatGPT панель SWISSER с тремя быстрыми
+рыночными командами. Кнопки отправляют полные запросы в текущий чат; панель
+можно закрепить в компактном режиме.
+
 Имена endpoint сохранены, поэтому существующий Action продолжает работать.
 
 ## Что изменено
@@ -47,6 +51,7 @@ BOS/CHoCH. API остаётся shortlist и источником фактов; 
 ```bash
 python3 -m py_compile candle_closure.py api/*.py
 python3 -m unittest discover -s tests -v
+npm run test:mcp
 ```
 
 Плотная тестовая выборка даёт около 57 000 символов для общего scanner, а
@@ -61,6 +66,7 @@ GPT Actions менее 100 000 символов.
 - `api/scanner_action_v6.py`
 - `api/snapshot_v6.py`
 - `api/snapshot_action_v6.py`
+- `api/mcp.js` (`/mcp` через rewrite)
 
 Модули `candle_closure.py` и `luxalgo_structure.py` лежат в корне и не создают
 отдельных функций. Откат выполняется через историю Git; дополнительная
