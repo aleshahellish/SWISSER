@@ -112,7 +112,7 @@
                           },
                           "mtf_hierarchy": {
                             "type": "object",
-                            "description": "Детерминированная иерархия 1W/1D → 4H → 1H → 15M → 1M.",
+                            "description": "Рабочее ядро 1H → 15M → 1M; 4H/1D/1W используются как стратегический контекст и не переписывают активный сценарий.",
                             "properties": {
                               "status": {
                                 "type": "string"
@@ -157,8 +157,24 @@
                               "alignment_state": {
                                 "type": "string"
                               },
+                              "continuation_bias": {
+                                "type": "object",
+                                "description": "Потенциальное направление продолжения по 1H+15M; это контекст, а не текущая сделка.",
+                                "additionalProperties": true
+                              },
+                              "active_trade_scenario": {
+                                "type": "object",
+                                "description": "Текущий сценарий LONG/SHORT/LOCAL LONG/LOCAL SHORT/WAIT по ядру 1H→15M→1M.",
+                                "additionalProperties": true
+                              },
+                              "strategic_4h_context": {
+                                "type": "object",
+                                "description": "4H как предупреждающий стратегический контекст без права переписывать текущий сценарий.",
+                                "additionalProperties": true
+                              },
                               "trade_direction_preference": {
                                 "type": "object",
+                                "description": "Совместимое поле, повторяющее active_trade_scenario; при активном откате возвращает WAIT.",
                                 "additionalProperties": true
                               },
                               "execution_state": {
@@ -312,7 +328,7 @@
                     },
                     "mtf_hierarchy": {
                       "type": "object",
-                      "description": "Детерминированная иерархия 1W/1D → 4H → 1H → 15M → 1M.",
+                      "description": "Рабочее ядро 1H → 15M → 1M; 4H/1D/1W используются как стратегический контекст и не переписывают активный сценарий.",
                       "properties": {
                         "status": {
                           "type": "string"
@@ -357,8 +373,24 @@
                         "alignment_state": {
                           "type": "string"
                         },
+                        "continuation_bias": {
+                          "type": "object",
+                          "description": "Потенциальное направление продолжения по 1H+15M; это контекст, а не текущая сделка.",
+                          "additionalProperties": true
+                        },
+                        "active_trade_scenario": {
+                          "type": "object",
+                          "description": "Текущий сценарий LONG/SHORT/LOCAL LONG/LOCAL SHORT/WAIT по ядру 1H→15M→1M.",
+                          "additionalProperties": true
+                        },
+                        "strategic_4h_context": {
+                          "type": "object",
+                          "description": "4H как предупреждающий стратегический контекст без права переписывать текущий сценарий.",
+                          "additionalProperties": true
+                        },
                         "trade_direction_preference": {
                           "type": "object",
+                          "description": "Совместимое поле, повторяющее active_trade_scenario; при активном откате возвращает WAIT.",
                           "additionalProperties": true
                         },
                         "execution_state": {

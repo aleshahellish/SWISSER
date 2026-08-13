@@ -177,7 +177,9 @@ export function createSwisserMcpServer() {
       "затем get_swisser_market_snapshot только для достойных кандидатов. При первой активации " +
       "вызови open_swisser_controls: панель сама запросит постоянный PiP-режим. Не открывай её повторно " +
       "после каждого ответа, пока она активна; повтори вызов только по просьбе пользователя. " +
-      "Не выдумывай отсутствующие уровни.",
+      "Текущую сделку называй по active_trade_scenario ядра 1h→15m→1m; continuation_bias и 4h — " +
+      "контекст, а не активный " +
+      "LONG/SHORT. Не выдумывай отсутствующие уровни.",
   });
 
   server.registerTool(
@@ -186,7 +188,8 @@ export function createSwisserMcpServer() {
       title: "Сканировать рынок SWISSER",
       description:
         "Получает компактный актуальный scanner по TAO, HYPE, SOL, XRP, DOGE и ETH; BTC используется только как рыночный контекст. " +
-        "Всегда начинай рыночный запрос с этого инструмента. Пустой список означает полный скан всех семи символов.",
+        "Всегда начинай рыночный запрос с этого инструмента. Для текущего сценария используй active_trade_scenario, " +
+        "не continuation_bias. Пустой список означает полный скан всех семи символов.",
       inputSchema: {
         symbols: z
           .array(z.enum(SUPPORTED_SYMBOLS))

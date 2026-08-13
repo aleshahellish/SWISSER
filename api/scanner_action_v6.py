@@ -18,6 +18,7 @@ from luxalgo_structure import (
     reference_bias_signal,
     reference_structure_summary,
 )
+from mtf_decision import build_mtf_decision
 
 
 BASE = "https://api.mexc.com"
@@ -562,178 +563,6 @@ def _single_bias(signals: dict[str, dict], timeframe: str) -> dict:
     }
 
 
-def _alignment_state(signals: dict[str, dict]) -> str:
-    h4 = signals["4h"]["primary_direction"]
-    h1 = signals["1h"]["primary_direction"]
-    m15 = signals["15m"]["primary_direction"]
-    m1 = signals["1m"]["primary_direction"]
-
-    core = (h4, h1, m15)
-    if any(item not in DIRECTIONAL_BIASES for item in core):
-        return "INSUFFICIENT_DATA"
-
-    if h4 == h1 == m15 == m1 == "BULLISH":
-        return "FULL_BULLISH_ALIGNMENT"
-    if h4 == h1 == m15 == m1 == "BEARISH":
-        return "FULL_BEARISH_ALIGNMENT"
-
-    if h4 == h1 == m15 == "BULLISH" and m1 != "BULLISH":
-        return "HTF_BULLISH_LTF_PULLBACK"
-    if h4 == h1 == m15 == "BEARISH" and m1 != "BEARISH":
-        return "HTF_BEARISH_LTF_PULLBACK"
-
-    if h4 == h1 == "BULLISH" and m15 == "BEARISH":
-        return "HTF_BULLISH_LTF_PULLBACK"
-    if h4 == h1 == "BEARISH" and m15 == "BULLISH":
-        return "HTF_BEARISH_LTF_PULLBACK"
-
-    if h1 == m15 and h1 in DIRECTIONAL_BIASES and h1 != h4:
-        return "LTF_REVERSAL_ATTEMPT"
-
-    return "MIXED_CONFLICT"
-
-
-def _trade_preference(
-    alignment_state: str,
-    signals: dict[str, dict],
-    broad_context: dict,
-) -> dict:
-    broad_direction = broad_context.get("direction", "UNDETERMINED")
-
-    if alignment_state == "FULL_BULLISH_ALIGNMENT":
-        preference = {
-            "direction": "LONG",
-            "mode": "WITH_INTRADAY_TREND",
-            "requires_entry_confirmation": True,
-            "reason": "4h, 1h, 15m and 1m are bullish; a fresh 1m trigger is still required.",
-        }
-    elif alignment_state == "FULL_BEARISH_ALIGNMENT":
-        preference = {
-            "direction": "SHORT",
-            "mode": "WITH_INTRADAY_TREND",
-            "requires_entry_confirmation": True,
-            "reason": "4h, 1h, 15m and 1m are bearish; a fresh 1m trigger is still required.",
-        }
-    elif alignment_state == "HTF_BULLISH_LTF_PULLBACK":
-        preference = {
-            "direction": "LONG",
-            "mode": "WAIT_FOR_BULLISH_ENTRY_CONFIRMATION",
-            "requires_entry_confirmation": True,
-            "reason": "Higher trading timeframes are bullish while a lower timeframe is pulling back.",
-        }
-    elif alignment_state == "HTF_BEARISH_LTF_PULLBACK":
-        preference = {
-            "direction": "SHORT",
-            "mode": "WAIT_FOR_BEARISH_ENTRY_CONFIRMATION",
-            "requires_entry_confirmation": True,
-            "reason": "Higher trading timeframes are bearish while a lower timeframe is pulling back.",
-        }
-    elif alignment_state == "LTF_REVERSAL_ATTEMPT":
-        attempted_direction = signals["15m"]["primary_direction"]
-        return {
-            "direction": "WAIT",
-            "mode": "REVERSAL_NOT_CONFIRMED_BY_4H",
-            "requires_entry_confirmation": True,
-            "possible_reversal_direction": attempted_direction,
-            "broad_context_direction": broad_direction,
-            "broad_context_caution": True,
-            "reason": "1h and 15m oppose 4h; treat this as an attempt, not an established reversal.",
-        }
-    elif alignment_state == "INSUFFICIENT_DATA":
-        return {
-            "direction": "UNDETERMINED",
-            "mode": "NO_RELIABLE_HIERARCHY",
-            "requires_entry_confirmation": True,
-            "broad_context_direction": broad_direction,
-            "broad_context_caution": True,
-            "reason": "At least one core timeframe has no directional state.",
-        }
-    else:
-        return {
-            "direction": "WAIT",
-            "mode": "CONFLICTING_TIMEFRAMES",
-            "requires_entry_confirmation": True,
-            "broad_context_direction": broad_direction,
-            "broad_context_caution": True,
-            "reason": "4h, 1h and 15m do not form a clean hierarchy.",
-        }
-
-    preferred_bias = {
-        "LONG": "BULLISH",
-        "SHORT": "BEARISH",
-    }[preference["direction"]]
-    counter_broad_context = (
-        broad_direction in DIRECTIONAL_BIASES
-        and broad_direction != preferred_bias
-    )
-
-    preference["broad_context_direction"] = broad_direction
-    preference["broad_context_caution"] = (
-        counter_broad_context or broad_direction in {"MIXED", "UNDETERMINED"}
-    )
-
-    if counter_broad_context:
-        if preference["mode"].startswith("WAIT_FOR_"):
-            preference["mode"] += "_COUNTER_BROAD_CONTEXT"
-        else:
-            preference["mode"] = (
-                "INTRADAY_DIRECTION_COUNTER_BROAD_CONTEXT"
-            )
-        preference["requires_entry_confirmation"] = True
-        preference["reason"] += (
-            " Daily/weekly context is opposite, so conviction must be reduced."
-        )
-
-    return preference
-
-
-def _execution_state(
-    preference: dict,
-    entry_signal: dict,
-) -> dict:
-    preferred_direction = {
-        "LONG": "BULLISH",
-        "SHORT": "BEARISH",
-    }.get(preference.get("direction"))
-
-    entry_direction = entry_signal["primary_direction"]
-    trigger = entry_signal["latest_trigger"]
-
-    if preferred_direction is None:
-        relation = "NOT_APPLICABLE"
-        state = "NO_DIRECTIONAL_PREFERENCE"
-    elif entry_direction == preferred_direction:
-        relation = "ALIGNED"
-        if (
-            trigger["is_fresh"]
-            and trigger["direction"] == preferred_direction
-            and trigger["type"] in {"C3_CONFIRMED", "C2_CONFIRMED_BY_C3"}
-        ):
-            state = "FRESH_ENTRY_CONFIRMATION"
-        elif (
-            trigger["is_fresh"]
-            and trigger["direction"] == preferred_direction
-            and trigger["type"] == "C2_UNCONFIRMED"
-        ):
-            state = "WAITING_FOR_C3_CONFIRMATION"
-        else:
-            state = "ENTRY_BIAS_ALIGNED_NO_FRESH_TRIGGER"
-    elif entry_direction in DIRECTIONAL_BIASES:
-        relation = "OPPOSED"
-        state = "ENTRY_TIMEFRAME_OPPOSED"
-    else:
-        relation = "UNDETERMINED"
-        state = "ENTRY_TIMEFRAME_UNDETERMINED"
-
-    return {
-        "state": state,
-        "preferred_direction": preferred_direction or "NONE",
-        "entry_timeframe_direction": entry_direction,
-        "relation_to_preference": relation,
-        "latest_entry_trigger": trigger,
-    }
-
-
 def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
     signals = {
         timeframe: _timeframe_signal(timeframe, timeframes.get(timeframe))
@@ -754,9 +583,7 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
         else "MIXED_OR_UNDETERMINED"
     )
 
-    alignment = _alignment_state(signals)
-    preference = _trade_preference(alignment, signals, broad_context)
-    execution = _execution_state(preference, signals["1m"])
+    decision = build_mtf_decision(signals, broad_context)
 
     conflicts = []
     for timeframe, signal in signals.items():
@@ -801,10 +628,14 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
 
     return {
         "status": "ok" if complete else "partial",
-        "method": "deterministic_mtf_luxalgo_v3",
+        "method": "deterministic_mtf_luxalgo_core",
         "closed_candles_only_for_structure": True,
         "role_map": MTF_ROLE_MAP,
         "priority_rule": [
+            "CORE_DIRECTION_1H",
+            "SETUP_CONFIRMATION_15M",
+            "ENTRY_CONFIRMATION_1M",
+            "4H_STRATEGIC_CONTEXT_ONLY",
             "LUXALGO_INTERNAL_OPERATIONAL",
             "LUXALGO_SWING_STRATEGIC_CONTEXT",
             "C2_C3_TRIGGER_ONLY",
@@ -819,15 +650,23 @@ def build_mtf_hierarchy(timeframes: dict[str, dict]) -> dict:
         ),
         "setup_timeframe_bias": _single_bias(signals, "15m"),
         "entry_timeframe_bias": _single_bias(signals, "1m"),
-        "alignment_scope": ["4h", "1h", "15m", "1m"],
+        "alignment_scope": ["1h", "15m", "1m"],
+        "strategic_context_scope": ["4h", "1d", "1w"],
         "broad_context_excluded_from_alignment_state": True,
-        "alignment_state": alignment,
-        "trade_direction_preference": preference,
-        "execution_state": execution,
+        "four_hour_excluded_from_alignment_state": True,
+        "alignment_state": decision["alignment_state"],
+        "continuation_bias": decision["continuation_bias"],
+        "active_trade_scenario": decision["active_trade_scenario"],
+        "strategic_4h_context": decision["strategic_4h_context"],
+        "trade_direction_preference": decision[
+            "trade_direction_preference"
+        ],
+        "execution_state": decision["execution_state"],
         "conflicts": conflicts,
         "scope_note": (
-            "This hierarchy organizes context. It does not create an automatic trade entry; "
-            "fresh 1m confirmation and risk control remain required."
+            "The active scenario is decided by 1h -> 15m -> 1m. 4h, 1d and "
+            "1w are strategic context and cannot overwrite the current trade "
+            "label. Fresh 1m confirmation and risk control remain required."
         ),
     }
 
@@ -1161,6 +1000,7 @@ def _compact_execution_state(state):
 
     return {
         "state": state.get("state"),
+        "trade_ready": state.get("trade_ready"),
         "preferred_direction": state.get("preferred_direction"),
         "entry_timeframe_direction": state.get(
             "entry_timeframe_direction"
@@ -1264,7 +1104,17 @@ def compact_for_gpt_action(full_result: dict) -> dict:
                 "entry_timeframe_bias": hierarchy.get(
                     "entry_timeframe_bias"
                 ),
+                "alignment_scope": hierarchy.get("alignment_scope"),
                 "alignment_state": hierarchy.get("alignment_state"),
+                "continuation_bias": hierarchy.get(
+                    "continuation_bias"
+                ),
+                "active_trade_scenario": hierarchy.get(
+                    "active_trade_scenario"
+                ),
+                "strategic_4h_context": hierarchy.get(
+                    "strategic_4h_context"
+                ),
                 "trade_direction_preference": hierarchy.get(
                     "trade_direction_preference"
                 ),
