@@ -7,8 +7,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const SERVER_VERSION = "1.0.0";
-const CONTROLS_URI = "ui://swisser/market-controls-v1.html";
+const SERVER_VERSION = "1.1.0";
+const CONTROLS_URI = "ui://swisser/market-controls-v2.html";
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
 const SUPPORTED_SYMBOLS = [
   "TAO_USDT",
@@ -41,6 +41,7 @@ const controlsHtml = `<!doctype html>
     .brand { font-size: 13px; font-weight: 800; letter-spacing: .08em; }
     .pin { border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; opacity: .72; padding: 5px 7px; border-radius: 8px; }
     .pin:hover { background: color-mix(in srgb, CanvasText 8%, transparent); opacity: 1; }
+    .pin:disabled { cursor: default; opacity: .82; }
     .commands { display: grid; gap: 8px; }
     .command { width: 100%; text-align: left; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, CanvasText 5%, Canvas); color: inherit; font: inherit; font-size: 13px; line-height: 1.35; cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
     .command:hover { border-color: #36a269; background: color-mix(in srgb, #36a269 10%, Canvas); }
@@ -49,6 +50,10 @@ const controlsHtml = `<!doctype html>
     .number { display: inline-grid; place-items: center; width: 21px; height: 21px; margin-right: 7px; border-radius: 7px; color: white; background: #238a55; font-size: 11px; font-weight: 800; }
     .status { min-height: 17px; margin: 8px 2px 0; font-size: 11px; opacity: .68; }
     @media (min-width: 680px) { .commands { grid-template-columns: repeat(3, 1fr); } .command { min-height: 72px; } }
+    body[data-display-mode="pip"] { padding: 8px; }
+    body[data-display-mode="pip"] .panel { padding: 10px; border-radius: 14px; }
+    body[data-display-mode="pip"] .commands { grid-template-columns: 1fr; gap: 6px; }
+    body[data-display-mode="pip"] .command { min-height: 0; padding: 8px 10px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -66,7 +71,45 @@ const controlsHtml = `<!doctype html>
   </section>
   <script>
     const status = document.getElementById("status");
+    const pinButton = document.getElementById("pin");
     const buttons = [...document.querySelectorAll(".command")];
+    let autoPinAttempted = false;
+
+    function setDisplayMode(mode) {
+      document.body.dataset.displayMode = mode || "inline";
+      const isPinned = mode === "pip";
+      pinButton.disabled = isPinned;
+      pinButton.textContent = isPinned ? "Закреплено ✓" : "Закрепить панель";
+      pinButton.title = isPinned
+        ? "Панель останется поверх чата до закрытия"
+        : "Оставить панель поверх чата";
+    }
+
+    async function requestPip({ manual = false, force = false } = {}) {
+      if (window.openai?.displayMode === "pip") {
+        setDisplayMode("pip");
+        return true;
+      }
+      if (!window.openai?.requestDisplayMode) {
+        if (manual) status.textContent = "Закрепление недоступно в этом режиме ChatGPT.";
+        return false;
+      }
+      if (autoPinAttempted && !manual && !force) return false;
+      if (!manual) autoPinAttempted = true;
+
+      try {
+        const result = await window.openai.requestDisplayMode({ mode: "pip" });
+        setDisplayMode(result?.mode);
+        if (result?.mode === "pip") {
+          status.textContent = "Панель закреплена поверх чата.";
+          return true;
+        }
+        if (manual) status.textContent = "ChatGPT оставил панель в текущем режиме.";
+      } catch (error) {
+        if (manual) status.textContent = error?.message || "Не удалось закрепить панель.";
+      }
+      return false;
+    }
 
     async function send(prompt, button) {
       buttons.forEach((item) => { item.disabled = true; });
@@ -75,6 +118,7 @@ const controlsHtml = `<!doctype html>
         if (!window.openai?.sendFollowUpMessage) {
           throw new Error("Команды недоступны в этом режиме ChatGPT");
         }
+        await requestPip({ force: true });
         await window.openai.sendFollowUpMessage({ prompt, scrollToBottom: true });
         status.textContent = "Запрос отправлен.";
       } catch (error) {
@@ -88,15 +132,17 @@ const controlsHtml = `<!doctype html>
       button.addEventListener("click", () => send(button.dataset.command, button));
     });
 
-    document.getElementById("pin").addEventListener("click", async () => {
-      try {
-        if (!window.openai?.requestDisplayMode) throw new Error("Закрепление недоступно");
-        const result = await window.openai.requestDisplayMode({ mode: "pip" });
-        status.textContent = result?.mode === "pip" ? "Панель закреплена." : "ChatGPT оставил панель в текущем режиме.";
-      } catch (error) {
-        status.textContent = error?.message || "Не удалось закрепить панель.";
-      }
+    pinButton.addEventListener("click", () => requestPip({ manual: true, force: true }));
+
+    window.addEventListener("openai:set_globals", (event) => {
+      const mode = event.detail?.globals?.displayMode;
+      if (mode) setDisplayMode(mode);
+      requestPip();
     });
+
+    setDisplayMode(window.openai?.displayMode || "inline");
+    requestAnimationFrame(() => requestPip());
+    setTimeout(() => requestPip(), 350);
   </script>
 </body>
 </html>`;
@@ -128,8 +174,10 @@ export function createSwisserMcpServer() {
   }, {
     instructions:
       "SWISSER анализирует MEXC Futures. Сначала используй scan_swisser_markets для всех монет, " +
-      "затем get_swisser_market_snapshot только для достойных кандидатов. После рыночного ответа " +
-      "вызови open_swisser_controls, чтобы снова показать три кнопки. Не выдумывай отсутствующие уровни.",
+      "затем get_swisser_market_snapshot только для достойных кандидатов. При первой активации " +
+      "вызови open_swisser_controls: панель сама запросит постоянный PiP-режим. Не открывай её повторно " +
+      "после каждого ответа, пока она активна; повтори вызов только по просьбе пользователя. " +
+      "Не выдумывай отсутствующие уровни.",
   });
 
   server.registerTool(
@@ -193,9 +241,9 @@ export function createSwisserMcpServer() {
     {
       title: "Открыть команды SWISSER",
       description:
-        "Показывает компактную панель из трёх быстрых рыночных команд SWISSER. " +
-        "Вызывай этот инструмент при первом запуске SWISSER, по просьбе показать или вернуть кнопки, " +
-        "а также после каждого ответа на одну из трёх рыночных команд, чтобы панель снова была доступна внизу чата.",
+        "Показывает компактную панель из трёх быстрых рыночных команд SWISSER и автоматически запрашивает " +
+        "постоянный PiP-режим поверх чата. Вызывай инструмент при первом запуске SWISSER и по просьбе вернуть " +
+        "панель. Не вызывай его повторно после каждого ответа, пока PiP-панель активна.",
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -213,7 +261,7 @@ export function createSwisserMcpServer() {
       content: [
         {
           type: "text",
-          text: "Панель трёх быстрых команд SWISSER открыта. Не перечисляй команды повторно обычным текстом.",
+          text: "Панель трёх быстрых команд SWISSER открыта и автоматически запрашивает закрепление поверх чата. Не перечисляй команды повторно обычным текстом.",
         },
       ],
       structuredContent: {

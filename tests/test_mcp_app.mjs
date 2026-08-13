@@ -47,6 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
+  assert.equal(initialized.result.serverInfo.version, "1.1.0");
 
   const tools = await rpc(url, 2, "tools/list");
   assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
@@ -56,7 +57,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   ]);
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls-v1.html",
+    "ui://swisser/market-controls-v2.html",
   );
 
   const called = await rpc(url, 3, "tools/call", {
@@ -69,10 +70,12 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
 
   const resources = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls-v1.html",
+    uri: "ui://swisser/market-controls-v2.html",
   });
   const html = resources.result.contents[0].text;
   for (const command of COMMANDS) assert.match(html, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(html, /sendFollowUpMessage/);
   assert.match(html, /requestDisplayMode\(\{ mode: "pip" \}\)/);
+  assert.match(html, /requestAnimationFrame\(\(\) => requestPip\(\)\)/);
+  assert.match(html, /openai:set_globals/);
 });
