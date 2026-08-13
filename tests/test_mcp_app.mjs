@@ -47,7 +47,14 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.2.1");
+  assert.equal(initialized.result.serverInfo.version, "1.3.0");
+  assert.deepEqual(initialized.result.serverInfo.icons, [
+    {
+      src: "https://tao-mexc-live.vercel.app/swisser-icon.svg",
+      mimeType: "image/svg+xml",
+      sizes: ["64x64"],
+    },
+  ]);
 
   const tools = await rpc(url, 2, "tools/list");
   assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
@@ -57,7 +64,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   ]);
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls-v3.html",
+    "ui://swisser/market-controls.html",
   );
 
   const called = await rpc(url, 3, "tools/call", {
@@ -70,7 +77,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
 
   const resources = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls-v3.html",
+    uri: "ui://swisser/market-controls.html",
   });
   const html = resources.result.contents[0].text;
   for (const command of COMMANDS) assert.match(html, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -83,9 +90,9 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.match(html, /Что близко к входу/);
   assert.doesNotMatch(html, /#36a269|#238a55/);
 
-  const legacyResources = await rpc(url, 5, "resources/read", {
-    uri: "ui://swisser/market-controls-v1.html",
-  });
-  assert.equal(legacyResources.result.contents[0].mimeType, "text/html;profile=mcp-app");
-  assert.match(legacyResources.result.contents[0].text, /<div class="brand">SWISSER<\/div>/);
+  const listedResources = await rpc(url, 5, "resources/list");
+  assert.deepEqual(
+    listedResources.result.resources.map((resource) => resource.uri),
+    ["ui://swisser/market-controls.html"],
+  );
 });
