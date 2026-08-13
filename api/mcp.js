@@ -7,9 +7,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const SERVER_VERSION = "1.1.1";
-const CONTROLS_URI = "ui://swisser/market-controls-v2.html";
-const LEGACY_CONTROLS_URIS = ["ui://swisser/market-controls-v1.html"];
+const SERVER_VERSION = "1.2.0";
+const CONTROLS_URI = "ui://swisser/market-controls-v3.html";
+const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls-v2.html",
+  "ui://swisser/market-controls-v1.html",
+];
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
 const SUPPORTED_SYMBOLS = [
   "TAO_USDT",
@@ -27,6 +30,12 @@ export const COMMANDS = [
   "Есть ли смысл ждать сегодня? Что близко к входу?",
 ];
 
+const COMMAND_LABELS = [
+  "Обновить рынок",
+  "Лучшие сделки",
+  "Что близко к входу",
+];
+
 const controlsHtml = `<!doctype html>
 <html lang="ru">
 <head>
@@ -34,53 +43,62 @@ const controlsHtml = `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SWISSER — команды рынка</title>
   <style>
-    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 12px; background: transparent; color: CanvasText; }
-    .panel { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 16px; padding: 12px; background: color-mix(in srgb, Canvas 96%, transparent); }
-    .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-    .brand { font-size: 13px; font-weight: 800; letter-spacing: .08em; }
-    .pin { border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; opacity: .72; padding: 5px 7px; border-radius: 8px; }
-    .pin:hover { background: color-mix(in srgb, CanvasText 8%, transparent); opacity: 1; }
-    .pin:disabled { cursor: default; opacity: .82; }
-    .commands { display: grid; gap: 8px; }
-    .command { width: 100%; text-align: left; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, CanvasText 5%, Canvas); color: inherit; font: inherit; font-size: 13px; line-height: 1.35; cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
-    .command:hover { border-color: #36a269; background: color-mix(in srgb, #36a269 10%, Canvas); }
+    body { margin: 0; padding: 6px; background: transparent; color: CanvasText; }
+    .panel { border: 1px solid color-mix(in srgb, CanvasText 14%, transparent); border-radius: 12px; padding: 8px; background: Canvas; }
+    .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .brand { font-size: 11px; font-weight: 700; letter-spacing: .12em; opacity: .68; }
+    .pin { border: 1px solid color-mix(in srgb, CanvasText 14%, transparent); background: transparent; color: inherit; font: inherit; font-size: 10.5px; line-height: 1.3; cursor: pointer; opacity: .7; padding: 3px 6px; border-radius: 6px; }
+    .pin:hover { background: color-mix(in srgb, CanvasText 7%, transparent); opacity: 1; }
+    .pin:disabled { cursor: default; opacity: .55; }
+    .commands { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+    .command { display: flex; align-items: center; width: 100%; min-height: 34px; text-align: left; border: 1px solid color-mix(in srgb, CanvasText 14%, transparent); border-radius: 8px; padding: 6px 8px; background: color-mix(in srgb, CanvasText 3%, Canvas); color: inherit; font: inherit; font-size: 12px; line-height: 1.2; cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
+    .command:hover { border-color: color-mix(in srgb, CanvasText 28%, transparent); background: color-mix(in srgb, CanvasText 7%, Canvas); }
     .command:active { transform: translateY(1px); }
     .command:disabled { cursor: wait; opacity: .55; }
-    .number { display: inline-grid; place-items: center; width: 21px; height: 21px; margin-right: 7px; border-radius: 7px; color: white; background: #238a55; font-size: 11px; font-weight: 800; }
-    .status { min-height: 17px; margin: 8px 2px 0; font-size: 11px; opacity: .68; }
-    @media (min-width: 680px) { .commands { grid-template-columns: repeat(3, 1fr); } .command { min-height: 72px; } }
-    body[data-display-mode="pip"] { padding: 8px; }
-    body[data-display-mode="pip"] .panel { padding: 10px; border-radius: 14px; }
-    body[data-display-mode="pip"] .commands { grid-template-columns: 1fr; gap: 6px; }
-    body[data-display-mode="pip"] .command { min-height: 0; padding: 8px 10px; font-size: 12px; }
+    .number { flex: 0 0 auto; display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 6px; border: 1px solid color-mix(in srgb, CanvasText 12%, transparent); border-radius: 5px; background: color-mix(in srgb, CanvasText 6%, Canvas); font-size: 10px; font-weight: 700; opacity: .78; }
+    .status { margin: 5px 1px 0; font-size: 10px; line-height: 1.3; opacity: .62; }
+    .status:empty { display: none; }
+    @media (max-width: 560px) { .commands { grid-template-columns: 1fr; } }
+    body[data-display-mode="pip"] { padding: 4px; }
+    body[data-display-mode="pip"] .panel { padding: 6px; border-radius: 10px; }
+    body[data-display-mode="pip"] .head { margin-bottom: 5px; }
+    body[data-display-mode="pip"] .commands { grid-template-columns: 1fr; gap: 4px; }
+    body[data-display-mode="pip"] .command { min-height: 30px; padding: 5px 7px; font-size: 11.5px; }
   </style>
 </head>
 <body>
   <section class="panel" aria-label="Быстрые команды SWISSER">
     <div class="head">
-      <div class="brand">SWISSER · РЫНОК</div>
-      <button class="pin" id="pin" type="button" title="Оставить панель поверх чата">Закрепить панель</button>
+      <div class="brand">SWISSER</div>
+      <button class="pin" id="pin" type="button" title="Оставить панель поверх чата">Закрепить</button>
     </div>
     <div class="commands">
-      <button class="command" type="button" data-command="${COMMANDS[0]}"><span class="number">1</span>${COMMANDS[0]}</button>
-      <button class="command" type="button" data-command="${COMMANDS[1]}"><span class="number">2</span>${COMMANDS[1]}</button>
-      <button class="command" type="button" data-command="${COMMANDS[2]}"><span class="number">3</span>${COMMANDS[2]}</button>
+      <button class="command" type="button" data-command="${COMMANDS[0]}"><span class="number">1</span>${COMMAND_LABELS[0]}</button>
+      <button class="command" type="button" data-command="${COMMANDS[1]}"><span class="number">2</span>${COMMAND_LABELS[1]}</button>
+      <button class="command" type="button" data-command="${COMMANDS[2]}"><span class="number">3</span>${COMMAND_LABELS[2]}</button>
     </div>
-    <div class="status" id="status" role="status">Нажатие отправляет полный запрос в этот чат.</div>
+    <div class="status" id="status" role="status"></div>
   </section>
   <script>
     const status = document.getElementById("status");
     const pinButton = document.getElementById("pin");
     const buttons = [...document.querySelectorAll(".command")];
     let autoPinAttempted = false;
+    let statusTimer;
+
+    function setStatus(message, clearAfter = 0) {
+      clearTimeout(statusTimer);
+      status.textContent = message;
+      if (clearAfter) statusTimer = setTimeout(() => { status.textContent = ""; }, clearAfter);
+    }
 
     function setDisplayMode(mode) {
       document.body.dataset.displayMode = mode || "inline";
       const isPinned = mode === "pip";
       pinButton.disabled = isPinned;
-      pinButton.textContent = isPinned ? "Закреплено ✓" : "Закрепить панель";
+      pinButton.textContent = isPinned ? "Готово ✓" : "Закрепить";
       pinButton.title = isPinned
         ? "Панель останется поверх чата до закрытия"
         : "Оставить панель поверх чата";
@@ -92,7 +110,7 @@ const controlsHtml = `<!doctype html>
         return true;
       }
       if (!window.openai?.requestDisplayMode) {
-        if (manual) status.textContent = "Закрепление недоступно в этом режиме ChatGPT.";
+        if (manual) setStatus("Закрепление недоступно в этом режиме ChatGPT.");
         return false;
       }
       if (autoPinAttempted && !manual && !force) return false;
@@ -102,28 +120,28 @@ const controlsHtml = `<!doctype html>
         const result = await window.openai.requestDisplayMode({ mode: "pip" });
         setDisplayMode(result?.mode);
         if (result?.mode === "pip") {
-          status.textContent = "Панель закреплена поверх чата.";
+          setStatus("Панель закреплена.", 1600);
           return true;
         }
-        if (manual) status.textContent = "ChatGPT оставил панель в текущем режиме.";
+        if (manual) setStatus("ChatGPT оставил панель в текущем режиме.");
       } catch (error) {
-        if (manual) status.textContent = error?.message || "Не удалось закрепить панель.";
+        if (manual) setStatus(error?.message || "Не удалось закрепить панель.");
       }
       return false;
     }
 
     async function send(prompt, button) {
       buttons.forEach((item) => { item.disabled = true; });
-      status.textContent = "Отправляю запрос…";
+      setStatus("Отправляю…");
       try {
         if (!window.openai?.sendFollowUpMessage) {
           throw new Error("Команды недоступны в этом режиме ChatGPT");
         }
         await requestPip({ force: true });
         await window.openai.sendFollowUpMessage({ prompt, scrollToBottom: true });
-        status.textContent = "Запрос отправлен.";
+        setStatus("Отправлено.", 1200);
       } catch (error) {
-        status.textContent = error?.message || "Не удалось отправить запрос.";
+        setStatus(error?.message || "Не удалось отправить запрос.");
       } finally {
         setTimeout(() => buttons.forEach((item) => { item.disabled = false; }), 700);
       }
@@ -177,7 +195,6 @@ export function createSwisserMcpServer() {
       "SWISSER анализирует MEXC Futures. Сначала используй scan_swisser_markets для всех монет, " +
       "затем get_swisser_market_snapshot только для достойных кандидатов. При первой активации " +
       "вызови open_swisser_controls: панель сама запросит постоянный PiP-режим. Не открывай её повторно " +
-      "после каждого ответа, пока она активна; повтори вызов только по просьбе пользователя. " +
       "Текущую сделку называй по active_trade_scenario ядра 1h→15m→1m; continuation_bias и 4h — " +
       "контекст, а не активный " +
       "LONG/SHORT. Не выдумывай отсутствующие уровни.",
