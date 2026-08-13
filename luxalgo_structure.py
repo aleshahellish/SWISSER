@@ -34,6 +34,8 @@ DEFAULT_SETTINGS = {
     "confluence_filter": False,
 }
 
+DIRECTIONAL_BIASES = {"BULLISH", "BEARISH"}
+
 USER_TRADINGVIEW_PROFILE = {
     "indicator": "Smart Money Concepts [LuxAlgo]",
     "mode": "HISTORICAL",
@@ -330,4 +332,125 @@ def luxalgo_market_structure(
         "candles_processed": len(ordered),
         "internal": internal.public(recent_limit),
         "swing": swing.public(recent_limit),
+    }
+
+
+def reference_structure_summary(
+    luxalgo: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return the only two layers allowed to define market structure."""
+
+    luxalgo = luxalgo if isinstance(luxalgo, dict) else {}
+    swing = luxalgo.get("swing") or {}
+    internal = luxalgo.get("internal") or {}
+    swing_direction = swing.get("current_direction", "UNDETERMINED")
+    internal_direction = internal.get(
+        "current_direction",
+        "UNDETERMINED",
+    )
+
+    if internal_direction in DIRECTIONAL_BIASES:
+        operational_direction = internal_direction
+        operational_source = "LUXALGO_INTERNAL"
+    elif swing_direction in DIRECTIONAL_BIASES:
+        operational_direction = swing_direction
+        operational_source = "LUXALGO_SWING_FALLBACK"
+    else:
+        operational_direction = "UNDETERMINED"
+        operational_source = "NONE"
+
+    if (
+        swing_direction in DIRECTIONAL_BIASES
+        and internal_direction in DIRECTIONAL_BIASES
+    ):
+        relation = (
+            "SWING_INTERNAL_ALIGNED"
+            if swing_direction == internal_direction
+            else "INTERNAL_COUNTER_SWING"
+        )
+    else:
+        relation = "PARTIAL_REFERENCE_DATA"
+
+    return {
+        "method": "LUXALGO_SWING_INTERNAL_REFERENCE_V1",
+        "only_bos_choch_authority": True,
+        "operational_direction": operational_direction,
+        "operational_direction_source": operational_source,
+        "relation": relation,
+        "strategic": {
+            "layer": "LUXALGO_SWING",
+            "role": "STRATEGIC_CONTEXT",
+            "length": swing.get("length"),
+            "direction": swing_direction,
+            "latest_event": swing.get("latest_event"),
+        },
+        "operational": {
+            "layer": "LUXALGO_INTERNAL",
+            "role": "TIMEFRAME_OPERATIONAL_STRUCTURE",
+            "length": internal.get("length"),
+            "direction": internal_direction,
+            "latest_event": internal.get("latest_event"),
+        },
+    }
+
+
+def reference_bias_signal(
+    reference_structure: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a directional signal exclusively from LuxAlgo structure."""
+
+    reference_structure = (
+        reference_structure
+        if isinstance(reference_structure, dict)
+        else {}
+    )
+    strategic = reference_structure.get("strategic") or {}
+    operational = reference_structure.get("operational") or {}
+    strategic_direction = strategic.get("direction", "UNDETERMINED")
+    operational_direction = operational.get(
+        "direction",
+        "UNDETERMINED",
+    )
+    primary = reference_structure.get(
+        "operational_direction",
+        "UNDETERMINED",
+    )
+    source = reference_structure.get(
+        "operational_direction_source",
+        "NONE",
+    )
+
+    conflicts = []
+    if (
+        strategic_direction in DIRECTIONAL_BIASES
+        and operational_direction in DIRECTIONAL_BIASES
+        and strategic_direction != operational_direction
+    ):
+        conflicts.append("LUXALGO_INTERNAL_COUNTER_SWING")
+
+    if primary not in DIRECTIONAL_BIASES:
+        confidence = "INSUFFICIENT_DATA"
+    elif (
+        strategic_direction == operational_direction == primary
+        and source == "LUXALGO_INTERNAL"
+    ):
+        confidence = "HIGH"
+    elif source == "LUXALGO_INTERNAL":
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
+
+    return {
+        "primary_direction": primary,
+        "direction_source": source,
+        "confidence": confidence,
+        "strategic_direction": strategic_direction,
+        "operational_direction": operational_direction,
+        "structure_relation": reference_structure.get(
+            "relation",
+            "PARTIAL_REFERENCE_DATA",
+        ),
+        "latest_swing_event": strategic.get("latest_event"),
+        "latest_internal_event": operational.get("latest_event"),
+        "internal_conflicts": conflicts,
     }

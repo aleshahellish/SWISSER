@@ -1,7 +1,11 @@
 from datetime import datetime, timezone
 import unittest
 
-from luxalgo_structure import luxalgo_market_structure
+from luxalgo_structure import (
+    luxalgo_market_structure,
+    reference_bias_signal,
+    reference_structure_summary,
+)
 from api import (
     scanner_action_v6,
     scanner_v6,
@@ -102,6 +106,36 @@ class LuxAlgoStructureTests(unittest.TestCase):
         self.assertIs(
             snapshot_action_v6.luxalgo_market_structure,
             luxalgo_market_structure,
+        )
+
+    def test_luxalgo_is_the_only_structure_authority(self):
+        reference = reference_structure_summary(
+            {
+                "swing": {
+                    "length": 50,
+                    "current_direction": "BEARISH",
+                    "latest_event": {"event_type": "BOS"},
+                },
+                "internal": {
+                    "length": 5,
+                    "current_direction": "BULLISH",
+                    "latest_event": {"event_type": "CHOCH"},
+                },
+            }
+        )
+        signal = reference_bias_signal(reference)
+
+        self.assertEqual(reference["operational_direction"], "BULLISH")
+        self.assertEqual(
+            reference["operational_direction_source"],
+            "LUXALGO_INTERNAL",
+        )
+        self.assertTrue(reference["only_bos_choch_authority"])
+        self.assertEqual(signal["primary_direction"], "BULLISH")
+        self.assertEqual(signal["strategic_direction"], "BEARISH")
+        self.assertEqual(
+            signal["internal_conflicts"],
+            ["LUXALGO_INTERNAL_COUNTER_SWING"],
         )
 
 

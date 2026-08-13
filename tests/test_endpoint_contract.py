@@ -167,6 +167,9 @@ class EndpointContractTests(unittest.TestCase):
         )
         for block in by_symbol["HYPE_USDT"]["timeframe_summary"].values():
             self.assertIn("luxalgo_structure", block)
+            self.assertNotIn("protected_structure", block)
+            self.assertNotIn("current_cisd_direction", block)
+            self.assertNotIn("latest_structure_break", block)
             self.assertEqual(
                 block["luxalgo_structure"]["settings"],
                 {
@@ -212,6 +215,9 @@ class EndpointContractTests(unittest.TestCase):
             self.assertIn("luxalgo_structure", block)
             self.assertIn("internal", block["luxalgo_structure"])
             self.assertIn("swing", block["luxalgo_structure"])
+            self.assertNotIn("swing_points", block)
+            self.assertNotIn("swing_structure", block)
+            self.assertNotIn("protected_structure", block)
         encoded = snapshot_action_v6.encode_gpt_action_payload(compact)
         self.assertLess(
             len(encoded.decode("utf-8")),
