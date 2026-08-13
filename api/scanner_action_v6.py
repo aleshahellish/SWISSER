@@ -1002,8 +1002,8 @@ def build(path: str) -> dict:
     return {
         "ok": all(item["ok"] for item in results),
         "source": "MEXC Futures public API",
-        "mode": "enhanced_multi_coin_scanner_v6",
-        "version": "6.4-luxalgo-structure",
+        "mode": "swisser_market_scan",
+        "version": "1.0.0",
         "fetched_at_unix": now,
         "fetched_at_utc": utc(now),
         "requested_symbols": symbols,
@@ -1196,8 +1196,8 @@ def compact_for_gpt_action(full_result: dict) -> dict:
     compact_result = {
         "ok": full_result.get("ok"),
         "source": full_result.get("source"),
-        "mode": "gpt_compact_multi_coin_scanner_v6",
-        "version": "6.4-luxalgo-structure",
+        "mode": "swisser_gpt_scan",
+        "version": "1.0.0",
         "fetched_at_unix": full_result.get("fetched_at_unix"),
         "fetched_at_utc": full_result.get("fetched_at_utc"),
         "requested_symbols": full_result.get("requested_symbols"),

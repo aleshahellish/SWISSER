@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MEXC Live Market Data",
+    "title": "SWISSER Market Data",
     "description": "Компактные GPT Action endpoints для MEXC Futures: LuxAlgo internal/swing, MTF-контекст, C2/C3/EQ и фазы H1 C2-C5.",
-    "version": "6.4.0"
+    "version": "1.0.0"
   },
   "servers": [
     {

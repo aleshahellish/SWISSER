@@ -812,8 +812,8 @@ def build(symbol: str) -> dict:
     return {
         "ok": True,
         "source": "MEXC Futures public API",
-        "mode": "enhanced_snapshot_v6",
-        "version": "6.4-luxalgo-structure",
+        "mode": "swisser_market_snapshot",
+        "version": "1.0.0",
         "symbol": symbol,
         "analysis_role": (
             "MARKET_CONTEXT"

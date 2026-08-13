@@ -814,8 +814,8 @@ def build(symbol: str) -> dict:
     return {
         "ok": True,
         "source": "MEXC Futures public API",
-        "mode": "enhanced_snapshot_v6",
-        "version": "6.4-luxalgo-structure",
+        "mode": "swisser_market_snapshot",
+        "version": "1.0.0",
         "symbol": symbol,
         "analysis_role": (
             "MARKET_CONTEXT"
@@ -1040,8 +1040,8 @@ def compact_snapshot_for_gpt_action(full_result: dict) -> dict:
     output = {
         "ok": full_result.get("ok"),
         "source": full_result.get("source"),
-        "mode": "gpt_compact_snapshot_v6",
-        "version": "6.4-luxalgo-structure",
+        "mode": "swisser_gpt_snapshot",
+        "version": "1.0.0",
         "symbol": full_result.get("symbol"),
         "analysis_role": full_result.get("analysis_role"),
         "eligible_trade_candidate": full_result.get(

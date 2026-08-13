@@ -1000,8 +1000,8 @@ def build(path: str) -> dict:
     return {
         "ok": all(item["ok"] for item in results),
         "source": "MEXC Futures public API",
-        "mode": "enhanced_multi_coin_scanner_v6",
-        "version": "6.4-luxalgo-structure",
+        "mode": "swisser_market_scan",
+        "version": "1.0.0",
         "fetched_at_unix": now,
         "fetched_at_utc": utc(now),
         "requested_symbols": symbols,

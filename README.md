@@ -1,6 +1,6 @@
-# MEXC trading scanner v6.4
+# SWISSER
 
-Сканер получает закрытые свечи MEXC Futures и строит структурированные данные
+SWISSER получает закрытые свечи MEXC Futures и строит структурированные данные
 для двухэтапного GPT Action:
 
 1. `/api/scanner_action_v6` — общий shortlist.
