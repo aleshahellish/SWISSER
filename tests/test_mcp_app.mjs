@@ -47,7 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.4.1");
+  assert.equal(initialized.result.serverInfo.version, "1.5.0");
   assert.deepEqual(initialized.result.serverInfo.icons, [
     {
       src: "https://tao-mexc-live.vercel.app/swisser-icon.svg",
@@ -59,12 +59,17 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   const tools = await rpc(url, 2, "tools/list");
   assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
     "scan_swisser_markets",
+    "render_swisser_market_card",
     "get_swisser_market_snapshot",
     "open_swisser_controls",
   ]);
   assert.equal(
-    tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.4.1.html",
+    tools.result.tools[3]._meta["openai/outputTemplate"],
+    "ui://swisser/market-controls/1.5.0.html",
+  );
+  assert.equal(
+    tools.result.tools[1]._meta["openai/outputTemplate"],
+    "ui://swisser/market-card-v1.html",
   );
 
   const called = await rpc(url, 3, "tools/call", {
@@ -77,7 +82,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
 
   const resources = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.4.1.html",
+    uri: "ui://swisser/market-controls/1.5.0.html",
   });
   const html = resources.result.contents[0].text;
   for (const command of COMMANDS) assert.match(html, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -95,6 +100,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.doesNotMatch(html, /#36a269|#238a55/);
 
   const supportedResourceUris = [
+    "ui://swisser/market-controls/1.5.0.html",
     "ui://swisser/market-controls/1.4.1.html",
     "ui://swisser/market-controls-v4.html",
     "ui://swisser/market-controls.html",
@@ -112,6 +118,61 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   const listedResources = await rpc(url, 20, "resources/list");
   assert.deepEqual(
     listedResources.result.resources.map((resource) => resource.uri),
-    supportedResourceUris,
+    [...supportedResourceUris, "ui://swisser/market-card-v1.html"],
   );
+
+  const cardInput = {
+    mode: "trades",
+    cut_time: "02:12 МСК",
+    btc_price: "$63,450",
+    btc_structure: { h4: "Bear", h1: "Bear", m15: "Bull", m1: "Bear" },
+    lead: "Готовых входов сейчас нет · ближе всего SOL",
+    market_rows: [
+      { symbol: "SOL", price: "$76.16", idea: "Wait", h4: "Bear", h1: "Bull", m15: "Bull", m1: "Bear", note: "Ждать возврата 76.31." },
+      { symbol: "HYPE", price: "$57.433", idea: "Wait", h4: "Bull", h1: "Bull", m15: "Bear", m1: "Bear", note: "Fresh-window закрыт." },
+      { symbol: "TAO", price: "$202.88", idea: "Wait", h4: "Bull", h1: "Bull", m15: "Bull", m1: "Bear", note: "Нужен свежий 1m Bull." },
+      { symbol: "ETH", price: "$1,886.05", idea: "Local Short", h4: "Bear", h1: "Bull", m15: "Bear", m1: "Bear", note: "Нет свежего подтверждения." },
+      { symbol: "XRP", price: "$1.0081", idea: "Wait", h4: "Bear", h1: "Bear", m15: "Bull", m1: "Bear", note: "Активного сценария нет." },
+      { symbol: "DOGE", price: "$0.07006", idea: "Wait", h4: "Bull", h1: "Bear", m15: "Bull", m1: "Bear", note: "Рассинхронизация." },
+    ],
+    candidates: [
+      {
+        symbol: "SOL",
+        direction: "Long",
+        entry_condition: "1m должен стать Bull и закрепиться выше 76.31.",
+        entry: "≈76.31",
+        stop_or_invalidation: "ниже 76.08",
+        targets: ["76.59", "77.32", "77.83"],
+        pnl_6x: ["+2.2%", "+7.9%"],
+      },
+    ],
+    conclusion: "SOL ближе всего, но вход только после подтверждения.",
+  };
+  const rendered = await rpc(url, 6, "tools/call", {
+    name: "render_swisser_market_card",
+    arguments: cardInput,
+  });
+  assert.deepEqual(rendered.result.structuredContent, {
+    ...cardInput,
+    commands: COMMANDS.map((prompt, index) => ({
+      id: index + 1,
+      label: COMMAND_LABELS[index],
+      prompt,
+    })),
+  });
+
+  const cardResource = await rpc(url, 7, "resources/read", {
+    uri: "ui://swisser/market-card-v1.html",
+  });
+  const cardHtml = cardResource.result.contents[0].text;
+  assert.match(cardHtml, /Монета/);
+  assert.match(cardHtml, /Состояние \/ ориентир/);
+  assert.match(cardHtml, /Потенц\. PnL 6x/);
+  assert.match(cardHtml, /window\.openai\?\.toolOutput/);
+  assert.match(cardHtml, /openai:set_globals/);
+  assert.match(cardHtml, /sendFollowUpMessage/);
+  assert.match(cardHtml, /command-bar/);
+  assert.match(cardHtml, /Italianno/);
+  assert.doesNotMatch(cardHtml, />RR</);
+  assert.doesNotMatch(cardHtml, /innerHTML/);
 });

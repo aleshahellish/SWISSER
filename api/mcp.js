@@ -7,9 +7,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const SERVER_VERSION = "1.4.1";
-const CONTROLS_URI = "ui://swisser/market-controls/1.4.1.html";
+import { MARKET_CARD_URI, marketCardHtml } from "../swisser_market_card.js";
+
+const SERVER_VERSION = "1.5.0";
+const CONTROLS_URI = "ui://swisser/market-controls/1.5.0.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.4.1.html",
   "ui://swisser/market-controls-v4.html",
   "ui://swisser/market-controls.html",
   "ui://swisser/market-controls-v3.html",
@@ -29,9 +32,9 @@ const SUPPORTED_SYMBOLS = [
 ];
 
 export const COMMANDS = [
-  "Быстрый обзор рынка. Используй только общий scanner, без подробных snapshot и новостей. Дай одну компактную таблицу и короткий итог.",
-  "Проверь лучшие сделки сейчас. После общего scanner подробно проверь snapshot всех действительно подходящих кандидатов без жёсткого лимита. Не добавляй слабые ситуации ради количества. Дай вход, отмену, цели и потенциальный PnL 6x.",
-  "Оцени день и шансы на вход позже. Найди, что близко к формированию в ближайшие часы, и проверь snapshot всех таких кандидатов. Календарь и криптоновости проверяй только когда есть действительно значимое событие, способное повлиять на рынок. Скажи, есть ли смысл ждать и чего именно.",
+  "Быстрый обзор рынка. Используй только общий scanner, без подробных snapshot и новостей. Заверши вызовом render_swisser_market_card: одна компактная таблица всех шести монет и короткий итог, без таблицы кандидатов.",
+  "Проверь лучшие сделки сейчас. После общего scanner подробно проверь snapshot всех действительно подходящих кандидатов без жёсткого лимита. Не добавляй слабые ситуации ради количества. Заверши вызовом render_swisser_market_card: общая таблица, затем вход, отмена, цели и потенциальный PnL 6x реальных кандидатов.",
+  "Оцени день и шансы на вход позже. Найди, что близко к формированию в ближайшие часы, и проверь snapshot всех таких кандидатов. Календарь и криптоновости проверяй только когда есть действительно значимое событие, способное повлиять на рынок. Заверши вызовом render_swisser_market_card и скажи, есть ли смысл ждать и чего именно.",
 ];
 
 export const COMMAND_LABELS = [
@@ -204,15 +207,16 @@ export function createSwisserMcpServer() {
   }, {
     instructions:
       "SWISSER анализирует MEXC Futures в трёх режимах. «Быстрый обзор» — один полный " +
-      "scan_swisser_markets, без snapshot, календаря и новостей; одна компактная таблица. " +
+      "scan_swisser_markets, без snapshot, календаря и новостей; одна компактная таблица. Заверши каждый " +
+      "рыночный ответ вызовом render_swisser_market_card и не дублируй карточку большой Markdown-таблицей. " +
       "«Сделки сейчас» — полный scanner, затем snapshot всех действительно подходящих кандидатов " +
       "без жёсткого лимита; не добавляй слабые ситуации ради количества; покажи " +
       "вход, отмену, цели и потенциальный PnL 6x. «Шансы на вход» — scanner и snapshot всех кандидатов, " +
       "близких к формированию в ближайшие часы; календарь и криптоновости проверяй только при наличии " +
       "действительно значимого события, способного повлиять на рынок; затем скажи, стоит ли ждать и чего именно. " +
       "Не расширяй более лёгкий режим до тяжёлого без прямой просьбы пользователя. При первой активации " +
-      "вызови open_swisser_controls: панель сама запросит постоянный PiP-режим. Не открывай её повторно " +
-      "после каждого ответа, пока она активна; повтори вызов только по просьбе пользователя. " +
+      "вызови open_swisser_controls: панель сама запросит PiP-режим на время активной сессии. Не открывай её повторно " +
+      "после каждого ответа, пока она активна; после анализа рабочие команды уже доступны под итоговой карточкой. " +
       "Текущую сделку называй по active_trade_scenario ядра 1h→15m→1m; continuation_bias и 4h — " +
       "контекст, а не активный " +
       "LONG/SHORT. Не выдумывай отсутствующие уровни.",
@@ -249,6 +253,89 @@ export function createSwisserMcpServer() {
     },
   );
 
+  registerAppTool(
+    server,
+    "render_swisser_market_card",
+    {
+      title: "Показать карточку рынка SWISSER",
+      description:
+        "Финально отображает неизменяемую компактную карточку SWISSER после анализа. " +
+        "Вызывай ровно один раз в конце каждого из трёх рыночных режимов. Передавай все шесть монет " +
+        "в порядке практического приоритета. В быстром режиме candidates должен быть пустым. " +
+        "В режимах сделок передавай только реально подходящих кандидатов. Не показывай RR. " +
+        "Карточка сама добавляет три команды под итогом, чтобы к ним не приходилось прокручивать чат.",
+      inputSchema: {
+        mode: z.enum(["quick", "trades", "day"]),
+        cut_time: z.string().min(1).max(40).describe("Время среза с пометкой МСК."),
+        btc_price: z.string().min(1).max(32).describe("Отформатированная цена BTC."),
+        btc_structure: z.object({
+          h4: z.enum(["Bull", "Bear", "Wait", "—"]),
+          h1: z.enum(["Bull", "Bear", "Wait", "—"]),
+          m15: z.enum(["Bull", "Bear", "Wait", "—"]),
+          m1: z.enum(["Bull", "Bear", "Wait", "—"]),
+        }),
+        lead: z.string().min(1).max(180).describe("Один главный вывод над таблицей."),
+        market_rows: z
+          .array(
+            z.object({
+              symbol: z.enum(["TAO", "HYPE", "SOL", "XRP", "DOGE", "ETH"]),
+              price: z.string().min(1).max(32),
+              idea: z.enum(["Long", "Short", "Local Long", "Local Short", "Wait", "—"]),
+              h4: z.enum(["Bull", "Bear", "Wait", "—"]),
+              h1: z.enum(["Bull", "Bear", "Wait", "—"]),
+              m15: z.enum(["Bull", "Bear", "Wait", "—"]),
+              m1: z.enum(["Bull", "Bear", "Wait", "—"]),
+              note: z.string().min(1).max(260),
+            }),
+          )
+          .length(6)
+          .describe("Все шесть монет, отсортированные по практической близости к сценарию."),
+        candidates: z
+          .array(
+            z.object({
+              symbol: z.enum(["TAO", "HYPE", "SOL", "XRP", "DOGE", "ETH"]),
+              direction: z.enum(["Long", "Short", "Local Long", "Local Short"]),
+              entry_condition: z.string().min(1).max(320),
+              entry: z.string().min(1).max(80),
+              stop_or_invalidation: z.string().min(1).max(120),
+              targets: z.array(z.string().min(1).max(40)).min(1).max(3),
+              pnl_6x: z.array(z.string().min(1).max(32)).min(1).max(3),
+            }),
+          )
+          .max(6)
+          .describe("Пусто для quick; в trades/day только реальные кандидаты без слабых заполнителей."),
+        conclusion: z.string().min(1).max(420),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      _meta: {
+        ui: { resourceUri: MARKET_CARD_URI },
+        "openai/outputTemplate": MARKET_CARD_URI,
+        "openai/toolInvocation/invoking": "Оформляю сводку SWISSER",
+        "openai/toolInvocation/invoked": "Сводка SWISSER готова",
+      },
+    },
+    async (card) => ({
+      content: [
+        {
+          type: "text",
+          text: "Карточка SWISSER отображена. Не повторяй её содержимое большой Markdown-таблицей; при необходимости добавь только одну короткую оговорку.",
+        },
+      ],
+      structuredContent: {
+        ...card,
+        commands: COMMANDS.map((prompt, index) => ({
+          id: index + 1,
+          label: COMMAND_LABELS[index],
+          prompt,
+        })),
+      },
+    }),
+  );
+
   server.registerTool(
     "get_swisser_market_snapshot",
     {
@@ -282,8 +369,8 @@ export function createSwisserMcpServer() {
       title: "Открыть команды SWISSER",
       description:
         "Показывает компактную панель из трёх разных по глубине рыночных режимов SWISSER и автоматически запрашивает " +
-        "постоянный PiP-режим поверх чата. Вызывай инструмент при первом запуске SWISSER и по просьбе вернуть " +
-        "панель. Не вызывай его повторно после каждого ответа, пока PiP-панель активна.",
+        "PiP-режим поверх чата на время активной сессии. Вызывай инструмент при первом запуске SWISSER и по просьбе вернуть " +
+        "панель. После ухода из чата ChatGPT может завершить PiP; три команды остаются под последней рыночной карточкой.",
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -320,7 +407,7 @@ export function createSwisserMcpServer() {
       resourceUri,
       {
         mimeType: RESOURCE_MIME_TYPE,
-        description: "Три постоянные кнопки быстрых рыночных запросов SWISSER",
+        description: "Три кнопки быстрых рыночных запросов SWISSER",
       },
       async () => ({
         contents: [
@@ -340,6 +427,38 @@ export function createSwisserMcpServer() {
       }),
     );
   }
+
+  registerAppResource(
+    server,
+    "Рыночная карточка SWISSER",
+    MARKET_CARD_URI,
+    {
+      mimeType: RESOURCE_MIME_TYPE,
+      description: "Компактная таблица рынка и реальных торговых кандидатов SWISSER",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MARKET_CARD_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: marketCardHtml,
+          _meta: {
+            ui: {
+              prefersBorder: false,
+              csp: {
+                connectDomains: [],
+                resourceDomains: [
+                  "https://fonts.googleapis.com",
+                  "https://fonts.gstatic.com",
+                ],
+              },
+            },
+            "openai/widgetPrefersBorder": false,
+          },
+        },
+      ],
+    }),
+  );
 
   return server;
 }
