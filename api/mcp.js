@@ -9,9 +9,10 @@ import { z } from "zod";
 
 import { MARKET_CARD_URI, marketCardHtml } from "../swisser_market_card.js";
 
-const SERVER_VERSION = "1.5.0";
-const CONTROLS_URI = "ui://swisser/market-controls/1.5.0.html";
+const SERVER_VERSION = "1.5.1";
+const CONTROLS_URI = "ui://swisser/market-controls/1.5.1.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.5.0.html",
   "ui://swisser/market-controls/1.4.1.html",
   "ui://swisser/market-controls-v4.html",
   "ui://swisser/market-controls.html",
@@ -32,9 +33,9 @@ const SUPPORTED_SYMBOLS = [
 ];
 
 export const COMMANDS = [
-  "Быстрый обзор рынка. Используй только общий scanner, без подробных snapshot и новостей. Заверши вызовом render_swisser_market_card: одна компактная таблица всех шести монет и короткий итог, без таблицы кандидатов.",
-  "Проверь лучшие сделки сейчас. После общего scanner подробно проверь snapshot всех действительно подходящих кандидатов без жёсткого лимита. Не добавляй слабые ситуации ради количества. Заверши вызовом render_swisser_market_card: общая таблица, затем вход, отмена, цели и потенциальный PnL 6x реальных кандидатов.",
-  "Оцени день и шансы на вход позже. Найди, что близко к формированию в ближайшие часы, и проверь snapshot всех таких кандидатов. Календарь и криптоновости проверяй только когда есть действительно значимое событие, способное повлиять на рынок. Заверши вызовом render_swisser_market_card и скажи, есть ли смысл ждать и чего именно.",
+  "Быстрый обзор рынка. Используй только общий scanner, без подробных snapshot и новостей. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме quick: одна компактная карточка всех шести монет и короткий итог, candidates пустой. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Проверь лучшие сделки сейчас. После общего scanner подробно проверь snapshot всех действительно подходящих кандидатов без жёсткого лимита. Не добавляй слабые ситуации ради количества. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме trades: общая карточка, затем вход, отмена, цели и потенциальный PnL 6x реальных кандидатов. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Оцени день и шансы на вход позже. Найди, что близко к формированию в ближайшие часы, и проверь snapshot всех таких кандидатов. Календарь и криптоновости проверяй только когда есть действительно значимое событие, способное повлиять на рынок. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме day и скажи, есть ли смысл ждать и чего именно. Не создавай Markdown-таблицу или PNG вместо renderer.",
 ];
 
 export const COMMAND_LABELS = [
@@ -206,9 +207,12 @@ export function createSwisserMcpServer() {
     ],
   }, {
     instructions:
-      "SWISSER анализирует MEXC Futures в трёх режимах. «Быстрый обзор» — один полный " +
-      "scan_swisser_markets, без snapshot, календаря и новостей; одна компактная таблица. Заверши каждый " +
-      "рыночный ответ вызовом render_swisser_market_card и не дублируй карточку большой Markdown-таблицей. " +
+      "ОБЯЗАТЕЛЬНО: каждый рыночный ответ SWISSER заканчивай вызовом render_swisser_market_card. " +
+      "Обычная Markdown-таблица, список или PNG не заменяют renderer. После вызова не дублируй карточку текстом. " +
+      "Точный запрос «1» означает режим quick («Быстрый обзор»), «2» — trades («Сделки сейчас»), " +
+      "«3» — day («Шансы на вход»); не проси расшифровку цифры. SWISSER анализирует MEXC Futures в трёх режимах. " +
+      "«Быстрый обзор» — один полный " +
+      "scan_swisser_markets, без snapshot, календаря и новостей; одна компактная карточка. " +
       "«Сделки сейчас» — полный scanner, затем snapshot всех действительно подходящих кандидатов " +
       "без жёсткого лимита; не добавляй слабые ситуации ради количества; покажи " +
       "вход, отмену, цели и потенциальный PnL 6x. «Шансы на вход» — scanner и snapshot всех кандидатов, " +
@@ -229,7 +233,8 @@ export function createSwisserMcpServer() {
       description:
         "Получает компактный актуальный scanner по TAO, HYPE, SOL, XRP, DOGE и ETH; BTC используется только как рыночный контекст. " +
         "Всегда начинай рыночный запрос с этого инструмента. Для текущего сценария используй active_trade_scenario, " +
-        "не continuation_bias. Пустой список означает полный скан всех семи символов.",
+        "не continuation_bias. Пустой список означает полный скан всех семи символов. После анализа не отвечай " +
+        "Markdown-таблицей: обязательный финальный шаг — render_swisser_market_card.",
       inputSchema: {
         symbols: z
           .array(z.enum(SUPPORTED_SYMBOLS))
@@ -247,7 +252,7 @@ export function createSwisserMcpServer() {
         symbols: symbols?.length ? symbols.join(",") : undefined,
       });
       return {
-        content: [{ type: "text", text: "Актуальный SWISSER scanner получен. Используй полный structuredContent для сравнения кандидатов." }],
+        content: [{ type: "text", text: "Актуальный SWISSER scanner получен. Используй полный structuredContent для сравнения кандидатов. Не формируй финальную Markdown-таблицу: заверши рыночный ответ вызовом render_swisser_market_card." }],
         structuredContent: data,
       };
     },
@@ -260,7 +265,8 @@ export function createSwisserMcpServer() {
       title: "Показать карточку рынка SWISSER",
       description:
         "Финально отображает неизменяемую компактную карточку SWISSER после анализа. " +
-        "Вызывай ровно один раз в конце каждого из трёх рыночных режимов. Передавай все шесть монет " +
+        "Это обязательный финальный инструмент, а не необязательное украшение. Вызывай ровно один раз в конце " +
+        "каждого из трёх рыночных режимов, в том числе когда пользователь отправил только 1, 2 или 3. Передавай все шесть монет " +
         "в порядке практического приоритета. В быстром режиме candidates должен быть пустым. " +
         "В режимах сделок передавай только реально подходящих кандидатов. Не показывай RR. " +
         "Карточка сама добавляет три команды под итогом, чтобы к ним не приходилось прокручивать чат.",
@@ -356,7 +362,7 @@ export function createSwisserMcpServer() {
     async ({ symbol }) => {
       const data = await fetchSwisser("/api/snapshot_action_v6", { symbol });
       return {
-        content: [{ type: "text", text: `Подробный SWISSER snapshot ${symbol} получен. Используй полный structuredContent.` }],
+        content: [{ type: "text", text: `Подробный SWISSER snapshot ${symbol} получен. Используй полный structuredContent и заверши рыночный ответ вызовом render_swisser_market_card вместо Markdown-таблицы.` }],
         structuredContent: data,
       };
     },
@@ -388,7 +394,7 @@ export function createSwisserMcpServer() {
       content: [
         {
           type: "text",
-          text: "Панель трёх быстрых команд SWISSER открыта и автоматически запрашивает закрепление поверх чата. Не перечисляй команды повторно обычным текстом.",
+          text: "Панель трёх быстрых команд SWISSER открыта и автоматически запрашивает закрепление поверх чата. Точные запросы 1, 2 и 3 соответствуют quick, trades и day. Каждый их рыночный ответ обязательно завершается render_swisser_market_card; Markdown-таблица или PNG не являются заменой. Не перечисляй команды повторно обычным текстом.",
         },
       ],
       structuredContent: {
