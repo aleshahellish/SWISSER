@@ -7,9 +7,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-import { MARKET_CARD_URI, marketCardHtml } from "../swisser_market_card.js";
+import {
+  LEGACY_MARKET_CARD_URIS,
+  MARKET_CARD_URI,
+  marketCardHtml,
+} from "../swisser_market_card.js";
 
-const SERVER_VERSION = "1.5.1";
+const SERVER_VERSION = "1.5.2";
 const CONTROLS_URI = "ui://swisser/market-controls/1.5.1.html";
 const LEGACY_CONTROLS_URIS = [
   "ui://swisser/market-controls/1.5.0.html",
@@ -434,37 +438,41 @@ export function createSwisserMcpServer() {
     );
   }
 
-  registerAppResource(
-    server,
-    "Рыночная карточка SWISSER",
-    MARKET_CARD_URI,
-    {
-      mimeType: RESOURCE_MIME_TYPE,
-      description: "Компактная таблица рынка и реальных торговых кандидатов SWISSER",
-    },
-    async () => ({
-      contents: [
-        {
-          uri: MARKET_CARD_URI,
-          mimeType: RESOURCE_MIME_TYPE,
-          text: marketCardHtml,
-          _meta: {
-            ui: {
-              prefersBorder: false,
-              csp: {
-                connectDomains: [],
-                resourceDomains: [
-                  "https://fonts.googleapis.com",
-                  "https://fonts.gstatic.com",
-                ],
+  for (const resourceUri of [MARKET_CARD_URI, ...LEGACY_MARKET_CARD_URIS]) {
+    registerAppResource(
+      server,
+      resourceUri === MARKET_CARD_URI
+        ? "Рыночная карточка SWISSER"
+        : "Рыночная карточка SWISSER (совместимость)",
+      resourceUri,
+      {
+        mimeType: RESOURCE_MIME_TYPE,
+        description: "Компактная таблица рынка и реальных торговых кандидатов SWISSER",
+      },
+      async () => ({
+        contents: [
+          {
+            uri: resourceUri,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: marketCardHtml,
+            _meta: {
+              ui: {
+                prefersBorder: false,
+                csp: {
+                  connectDomains: [],
+                  resourceDomains: [
+                    "https://fonts.googleapis.com",
+                    "https://fonts.gstatic.com",
+                  ],
+                },
               },
+              "openai/widgetPrefersBorder": false,
             },
-            "openai/widgetPrefersBorder": false,
           },
-        },
-      ],
-    }),
-  );
+        ],
+      }),
+    );
+  }
 
   return server;
 }

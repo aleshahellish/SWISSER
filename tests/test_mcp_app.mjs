@@ -47,7 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.5.1");
+  assert.equal(initialized.result.serverInfo.version, "1.5.2");
   assert.match(initialized.result.instructions, /каждый рыночный ответ SWISSER заканчивай вызовом render_swisser_market_card/);
   assert.match(initialized.result.instructions, /«3» — day/);
   assert.match(initialized.result.instructions, /Markdown-таблица, список или PNG не заменяют renderer/);
@@ -72,7 +72,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
   assert.equal(
     tools.result.tools[1]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v1.html",
+    "ui://swisser/market-card-v2.html",
   );
 
   const called = await rpc(url, 3, "tools/call", {
@@ -126,7 +126,11 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   const listedResources = await rpc(url, 20, "resources/list");
   assert.deepEqual(
     listedResources.result.resources.map((resource) => resource.uri),
-    [...supportedResourceUris, "ui://swisser/market-card-v1.html"],
+    [
+      ...supportedResourceUris,
+      "ui://swisser/market-card-v2.html",
+      "ui://swisser/market-card-v1.html",
+    ],
   );
 
   const cardInput = {
@@ -170,7 +174,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   });
 
   const cardResource = await rpc(url, 7, "resources/read", {
-    uri: "ui://swisser/market-card-v1.html",
+    uri: "ui://swisser/market-card-v2.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Монета/);
@@ -181,6 +185,25 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.match(cardHtml, /sendFollowUpMessage/);
   assert.match(cardHtml, /command-bar/);
   assert.match(cardHtml, /Italianno/);
+  assert.match(cardHtml, /notifyIntrinsicHeight/);
+  assert.match(cardHtml, /ResizeObserver/);
+  assert.match(cardHtml, /overflow-wrap: break-word/);
+  assert.doesNotMatch(cardHtml, /overflow-x:\s*auto/);
+  assert.doesNotMatch(cardHtml, /min-width:\s*6[89]0px/);
+  assert.doesNotMatch(cardHtml, /\.pnl\s*\{[^}]*white-space:\s*nowrap/s);
   assert.doesNotMatch(cardHtml, />RR</);
   assert.doesNotMatch(cardHtml, /innerHTML/);
+
+  const legacyCardResource = await rpc(url, 8, "resources/read", {
+    uri: "ui://swisser/market-card-v1.html",
+  });
+  assert.equal(
+    legacyCardResource.result.contents[0].uri,
+    "ui://swisser/market-card-v1.html",
+  );
+  assert.equal(
+    legacyCardResource.result.contents[0].mimeType,
+    "text/html;profile=mcp-app",
+  );
+  assert.match(legacyCardResource.result.contents[0].text, /notifyIntrinsicHeight/);
 });

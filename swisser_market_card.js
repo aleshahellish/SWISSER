@@ -1,4 +1,5 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v1.html";
+export const MARKET_CARD_URI = "ui://swisser/market-card-v2.html";
+export const LEGACY_MARKET_CARD_URIS = ["ui://swisser/market-card-v1.html"];
 
 export const marketCardHtml = String.raw`<!doctype html>
 <html lang="ru">
@@ -23,11 +24,13 @@ export const marketCardHtml = String.raw`<!doctype html>
     }
 
     * { box-sizing: border-box; }
+    html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
     body { margin: 0; padding: 0; background: transparent; color: CanvasText; }
     .card {
       width: 100%;
-      max-width: 780px;
-      margin: 0 auto;
+      max-width: none;
+      min-width: 0;
+      margin: 0;
       padding: 9px 10px 8px;
       border: 1px solid var(--line);
       border-radius: 9px;
@@ -46,9 +49,15 @@ export const marketCardHtml = String.raw`<!doctype html>
     }
     .context { color: var(--muted); }
     .lead { color: var(--bear); font-weight: 600; }
-    .table-wrap { width: 100%; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    th, td { padding: 7px 7px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .table-wrap { width: 100%; min-width: 0; overflow: visible; }
+    table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td {
+      min-width: 0;
+      padding: 7px 7px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      overflow-wrap: break-word;
+    }
     th { color: var(--muted); font-size: 12.5px; font-weight: 600; text-align: left; }
     .overview th:nth-child(1) { width: 12%; }
     .overview th:nth-child(2) { width: 14%; }
@@ -72,13 +81,18 @@ export const marketCardHtml = String.raw`<!doctype html>
     .wait { color: var(--wait); }
     .candidates { margin-top: 10px; }
     .candidates th:nth-child(1) { width: 14%; }
-    .candidates th:nth-child(2) { width: 30%; }
-    .candidates th:nth-child(3) { width: 22%; }
-    .candidates th:nth-child(4) { width: 21%; }
-    .candidates th:nth-child(5) { width: 13%; }
+    .candidates th:nth-child(2) { width: 29%; }
+    .candidates th:nth-child(3) { width: 24%; }
+    .candidates th:nth-child(4) { width: 16%; }
+    .candidates th:nth-child(5) { width: 17%; }
     .candidate-name { white-space: nowrap; }
-    .targets, .pnl { font-variant-numeric: tabular-nums; }
-    .pnl { white-space: nowrap; font-weight: 600; }
+    .targets, .pnl {
+      white-space: normal;
+      overflow-wrap: normal;
+      word-break: normal;
+      font-variant-numeric: tabular-nums;
+    }
+    .pnl { font-weight: 600; }
     .foot { margin-top: 8px; color: color-mix(in srgb, CanvasText 76%, transparent); }
     .command-bar {
       display: grid;
@@ -121,10 +135,17 @@ export const marketCardHtml = String.raw`<!doctype html>
     .empty { padding: 16px 8px; color: var(--muted); text-align: center; }
 
     @media (max-width: 620px) {
-      .card { padding: 7px; font-size: 13.5px; }
-      .table-wrap { overflow-x: auto; }
-      .overview { min-width: 690px; }
-      .candidates { min-width: 680px; }
+      .card { padding: 7px 5px; font-size: 12.5px; line-height: 1.32; }
+      .head { font-size: 11px; }
+      th, td { padding: 6px 3px; }
+      th { font-size: 11.5px; }
+      .overview th:not(:last-child),
+      .overview td:not(:last-child) { white-space: normal; }
+      .overview .coin,
+      .overview .price,
+      .overview .tf { white-space: nowrap; }
+      .candidate-name { white-space: normal; }
+      .signal { font-size: 1.08em; }
       .command-bar { grid-template-columns: 1fr; }
     }
   </style>
@@ -188,7 +209,26 @@ export const marketCardHtml = String.raw`<!doctype html>
     const conclusionNode = document.getElementById("conclusion");
     const commandBarNode = document.getElementById("command-bar");
     const commandStatusNode = document.getElementById("command-status");
+    const cardNode = document.querySelector(".card");
     let commandStatusTimer;
+    let heightFrame;
+    let heightObserver;
+    let lastReportedHeight = 0;
+
+    function reportIntrinsicHeight() {
+      cancelAnimationFrame(heightFrame);
+      heightFrame = requestAnimationFrame(() => {
+        const height = Math.ceil(cardNode.getBoundingClientRect().height) + 2;
+        if (!height || Math.abs(height - lastReportedHeight) < 2) return;
+        lastReportedHeight = height;
+        try {
+          const pending = window.openai?.notifyIntrinsicHeight?.(height);
+          if (pending?.catch) pending.catch(() => {});
+        } catch (_) {
+          // Older hosts may not expose dynamic-height notifications.
+        }
+      });
+    }
 
     function signalClass(value) {
       const normalized = String(value || "").toLowerCase();
@@ -315,11 +355,18 @@ export const marketCardHtml = String.raw`<!doctype html>
       buildCommands(data.commands || []);
       loading.hidden = true;
       content.hidden = false;
+      reportIntrinsicHeight();
     }
 
     window.addEventListener("openai:set_globals", (event) => {
       render(event.detail?.globals?.toolOutput);
     });
+    window.addEventListener("resize", reportIntrinsicHeight, { passive: true });
+    if (typeof ResizeObserver === "function") {
+      heightObserver = new ResizeObserver(reportIntrinsicHeight);
+      heightObserver.observe(cardNode);
+    }
+    if (document.fonts?.ready) document.fonts.ready.then(reportIntrinsicHeight);
     render(window.openai?.toolOutput);
   </script>
 </body>
