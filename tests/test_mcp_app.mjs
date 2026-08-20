@@ -47,7 +47,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.4.0");
+  assert.equal(initialized.result.serverInfo.version, "1.4.1");
   assert.deepEqual(initialized.result.serverInfo.icons, [
     {
       src: "https://tao-mexc-live.vercel.app/swisser-icon.svg",
@@ -64,7 +64,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   ]);
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls-v4.html",
+    "ui://swisser/market-controls/1.4.1.html",
   );
 
   const called = await rpc(url, 3, "tools/call", {
@@ -77,7 +77,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
 
   const resources = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls-v4.html",
+    uri: "ui://swisser/market-controls/1.4.1.html",
   });
   const html = resources.result.contents[0].text;
   for (const command of COMMANDS) assert.match(html, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -94,9 +94,24 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.match(COMMANDS[2], /только когда есть действительно значимое событие/);
   assert.doesNotMatch(html, /#36a269|#238a55/);
 
-  const listedResources = await rpc(url, 5, "resources/list");
+  const supportedResourceUris = [
+    "ui://swisser/market-controls/1.4.1.html",
+    "ui://swisser/market-controls-v4.html",
+    "ui://swisser/market-controls.html",
+    "ui://swisser/market-controls-v3.html",
+    "ui://swisser/market-controls-v2.html",
+    "ui://swisser/market-controls-v1.html",
+  ];
+  for (const [index, uri] of supportedResourceUris.entries()) {
+    const compatibleResource = await rpc(url, 10 + index, "resources/read", { uri });
+    assert.equal(compatibleResource.result.contents[0].uri, uri);
+    assert.equal(compatibleResource.result.contents[0].mimeType, "text/html;profile=mcp-app");
+    assert.match(compatibleResource.result.contents[0].text, /<div class="brand">SWISSER<\/div>/);
+  }
+
+  const listedResources = await rpc(url, 20, "resources/list");
   assert.deepEqual(
     listedResources.result.resources.map((resource) => resource.uri),
-    ["ui://swisser/market-controls-v4.html"],
+    supportedResourceUris,
   );
 });
