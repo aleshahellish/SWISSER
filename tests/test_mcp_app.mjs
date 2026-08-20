@@ -47,7 +47,10 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.5.0");
+  assert.equal(initialized.result.serverInfo.version, "1.5.1");
+  assert.match(initialized.result.instructions, /каждый рыночный ответ SWISSER заканчивай вызовом render_swisser_market_card/);
+  assert.match(initialized.result.instructions, /«3» — day/);
+  assert.match(initialized.result.instructions, /Markdown-таблица, список или PNG не заменяют renderer/);
   assert.deepEqual(initialized.result.serverInfo.icons, [
     {
       src: "https://tao-mexc-live.vercel.app/swisser-icon.svg",
@@ -65,7 +68,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   ]);
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.5.0.html",
+    "ui://swisser/market-controls/1.5.1.html",
   );
   assert.equal(
     tools.result.tools[1]._meta["openai/outputTemplate"],
@@ -82,7 +85,7 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   );
 
   const resources = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.5.0.html",
+    uri: "ui://swisser/market-controls/1.5.1.html",
   });
   const html = resources.result.contents[0].text;
   for (const command of COMMANDS) assert.match(html, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -97,9 +100,14 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
   assert.match(COMMANDS[1], /без жёсткого лимита/);
   assert.match(COMMANDS[2], /близко к формированию в ближайшие часы/);
   assert.match(COMMANDS[2], /только когда есть действительно значимое событие/);
+  for (const command of COMMANDS) {
+    assert.match(command, /ОБЯЗАТЕЛЬНЫЙ финальный шаг/);
+    assert.match(command, /Не создавай Markdown-таблицу или PNG вместо renderer/);
+  }
   assert.doesNotMatch(html, /#36a269|#238a55/);
 
   const supportedResourceUris = [
+    "ui://swisser/market-controls/1.5.1.html",
     "ui://swisser/market-controls/1.5.0.html",
     "ui://swisser/market-controls/1.4.1.html",
     "ui://swisser/market-controls-v4.html",
