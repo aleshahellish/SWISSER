@@ -7,8 +7,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const SERVER_VERSION = "1.4.0";
-const CONTROLS_URI = "ui://swisser/market-controls-v4.html";
+const SERVER_VERSION = "1.4.1";
+const CONTROLS_URI = "ui://swisser/market-controls/1.4.1.html";
+const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls-v4.html",
+  "ui://swisser/market-controls.html",
+  "ui://swisser/market-controls-v3.html",
+  "ui://swisser/market-controls-v2.html",
+  "ui://swisser/market-controls-v1.html",
+];
 const SERVER_ICON = "https://tao-mexc-live.vercel.app/swisser-icon.svg";
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
 const SUPPORTED_SYMBOLS = [
@@ -304,31 +311,35 @@ export function createSwisserMcpServer() {
     }),
   );
 
-  registerAppResource(
-    server,
-    "Команды рынка SWISSER",
-    CONTROLS_URI,
-    {
-      mimeType: RESOURCE_MIME_TYPE,
-      description: "Три постоянные кнопки быстрых рыночных запросов SWISSER",
-    },
-    async () => ({
-      contents: [
-        {
-          uri: CONTROLS_URI,
-          mimeType: RESOURCE_MIME_TYPE,
-          text: controlsHtml,
-          _meta: {
-            ui: {
-              prefersBorder: false,
-              csp: { connectDomains: [], resourceDomains: [] },
+  for (const resourceUri of [CONTROLS_URI, ...LEGACY_CONTROLS_URIS]) {
+    registerAppResource(
+      server,
+      resourceUri === CONTROLS_URI
+        ? "Команды рынка SWISSER"
+        : "Команды рынка SWISSER (совместимость)",
+      resourceUri,
+      {
+        mimeType: RESOURCE_MIME_TYPE,
+        description: "Три постоянные кнопки быстрых рыночных запросов SWISSER",
+      },
+      async () => ({
+        contents: [
+          {
+            uri: resourceUri,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: controlsHtml,
+            _meta: {
+              ui: {
+                prefersBorder: false,
+                csp: { connectDomains: [], resourceDomains: [] },
+              },
+              "openai/widgetPrefersBorder": false,
             },
-            "openai/widgetPrefersBorder": false,
           },
-        },
-      ],
-    }),
-  );
+        ],
+      }),
+    );
+  }
 
   return server;
 }
