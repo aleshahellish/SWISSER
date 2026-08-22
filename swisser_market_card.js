@@ -1,5 +1,8 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v2.html";
-export const LEGACY_MARKET_CARD_URIS = ["ui://swisser/market-card-v1.html"];
+export const MARKET_CARD_URI = "ui://swisser/market-card-v3.html";
+export const LEGACY_MARKET_CARD_URIS = [
+  "ui://swisser/market-card-v2.html",
+  "ui://swisser/market-card-v1.html",
+];
 
 export const marketCardHtml = String.raw`<!doctype html>
 <html lang="ru">
@@ -249,6 +252,13 @@ export const marketCardHtml = String.raw`<!doctype html>
       return appendText(parent, "span", value, "signal " + signalClass(value));
     }
 
+    function priorityClass(value) {
+      if (value === "top") return "rank-1";
+      if (value === "secondary") return "rank-2";
+      if (value === "watch") return "rank-3";
+      return "";
+    }
+
     function buildContext(data) {
       contextNode.replaceChildren();
       contextNode.append(document.createTextNode("Срез: " + data.cut_time + " · BTC " + data.btc_price + " · 4h "));
@@ -263,9 +273,9 @@ export const marketCardHtml = String.raw`<!doctype html>
 
     function buildMarketRows(rows) {
       marketRowsNode.replaceChildren();
-      rows.forEach((row, index) => {
+      rows.forEach((row) => {
         const tr = document.createElement("tr");
-        const coinCell = appendText(tr, "td", row.symbol, "coin rank-" + Math.min(index + 1, 4));
+        const coinCell = appendText(tr, "td", row.symbol, "coin " + priorityClass(row.priority));
         coinCell.classList.add("coin");
         appendText(tr, "td", row.price, "price");
         const idea = document.createElement("td");
@@ -282,15 +292,18 @@ export const marketCardHtml = String.raw`<!doctype html>
       });
     }
 
-    function buildCandidates(rows) {
+    function buildCandidates(rows, marketRows) {
       candidateRowsNode.replaceChildren();
       const visible = Array.isArray(rows) && rows.length > 0;
       candidatesWrap.hidden = !visible;
       if (!visible) return;
-      rows.forEach((row, index) => {
+      const priorities = new Map(
+        (marketRows || []).map((row) => [row.symbol, priorityClass(row.priority)]),
+      );
+      rows.forEach((row) => {
         const tr = document.createElement("tr");
         const name = document.createElement("td");
-        name.className = "candidate-name rank-" + Math.min(index + 1, 4);
+        name.className = "candidate-name " + (priorities.get(row.symbol) || "");
         name.append(document.createTextNode(row.symbol + " "));
         appendSignal(name, row.direction);
         tr.appendChild(name);
@@ -350,7 +363,7 @@ export const marketCardHtml = String.raw`<!doctype html>
       leadNode.textContent = data.lead;
       leadNode.className = "lead " + signalClass(data.lead);
       buildMarketRows(data.market_rows);
-      buildCandidates(data.candidates || []);
+      buildCandidates(data.candidates || [], data.market_rows);
       conclusionNode.textContent = "Итог: " + data.conclusion;
       buildCommands(data.commands || []);
       loading.hidden = true;
