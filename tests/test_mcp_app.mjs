@@ -47,10 +47,13 @@ test("SWISSER MCP exposes the three full commands and UI resource", async (t) =>
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.5.2");
+  assert.equal(initialized.result.serverInfo.version, "1.5.3");
   assert.match(initialized.result.instructions, /каждый рыночный ответ SWISSER заканчивай вызовом render_swisser_market_card/);
   assert.match(initialized.result.instructions, /«3» — day/);
   assert.match(initialized.result.instructions, /Markdown-таблица, список или PNG не заменяют renderer/);
+  assert.match(initialized.result.instructions, /исходный срез и исходный рейтинг/);
+  assert.match(initialized.result.instructions, /движение после среза, а не PnL сделки/);
+  assert.match(initialized.result.instructions, /Один эпизод не меняет веса ранжирования/);
   assert.deepEqual(initialized.result.serverInfo.icons, [
     {
       src: "https://tao-mexc-live.vercel.app/swisser-icon.svg",
