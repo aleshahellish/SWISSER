@@ -4,9 +4,7 @@ import unittest
 
 from api import (
     scanner_action_v6,
-    scanner_v6,
     snapshot_action_v6,
-    snapshot_v6,
 )
 from candle_closure import (
     closure_sequence_summary,
@@ -152,17 +150,16 @@ class CandleClosureTests(unittest.TestCase):
         self.assertEqual(phase["state"], "C5_LATE_SEQUENCE_PHASE")
         self.assertEqual(phase["candle_number"], 5)
 
-    def test_all_four_endpoints_share_the_same_detector(self):
+    def test_active_endpoints_share_the_same_detector(self):
         candles = [
             candle(0, 102, 106, 100, 104),
             candle(1, 104, 108, 101, 106),
             candle(2, 103, 110, 100, 108),
             candle(3, 101, 109, 98, 105),
         ]
-        expected = scanner_v6.detect(candles)
+        expected = detect_candle_closures(candles, filter_length=12)
 
         self.assertEqual(scanner_action_v6.detect(candles), expected)
-        self.assertEqual(snapshot_v6.detect(candles), expected)
         self.assertEqual(snapshot_action_v6.detect(candles), expected)
 
 

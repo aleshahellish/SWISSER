@@ -18,16 +18,15 @@ import {
   TRADE_SYMBOLS,
   buildVerifiedCard,
   canonicalMode,
-  createRunToken,
-  createScanEvidenceToken,
-  createSnapshotEvidenceToken,
-  verifyRunToken,
-  verifyScanEvidenceToken,
+  createScanWorkflowEvidence,
+  createSnapshotBundleEvidence,
+  verifyWorkflowEvidenceToken,
 } from "../swisser_evidence.js";
 
-const SERVER_VERSION = "1.7.3";
-const CONTROLS_URI = "ui://swisser/market-controls/1.7.3.html";
+const SERVER_VERSION = "1.8.0";
+const CONTROLS_URI = "ui://swisser/market-controls/1.8.0.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.7.3.html",
   "ui://swisser/market-controls/1.7.1.html",
   "ui://swisser/market-controls/1.7.0.html",
   "ui://swisser/market-controls/1.6.0.html",
@@ -44,9 +43,9 @@ const SERVER_ICON = "https://tao-mexc-live.vercel.app/swisser-icon.svg";
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
 
 export const COMMANDS = [
-  "Собери нейтральный обзор рынка без выбора лучших. Непосредственно перед scanner вызови start_swisser_run с mode=overview. Передай run_token в полный scan_swisser_markets по всем поддерживаемым символам; BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме overview с теми же run_token и scan_evidence_token; structural fields и время renderer возьмёт из проверенного evidence. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Найди лучшие сетапы на всём рынке. Непосредственно перед scanner вызови start_swisser_run с mode=setups. Передай run_token в полный scan_swisser_markets, затем вместе с scan_evidence_token — в get_swisser_market_snapshot для каждого действительно конкурентного кандидата. Не задавай количество заранее и не назначай единственного победителя, если несколько монет равноценны. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме setups с токенами этого же запуска; без свежего snapshot_evidence_token кандидат не может попасть в карточку. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Непосредственно перед scanner вызови start_swisser_run с mode=entry и expected_symbols из сохранённого набора. Не добавляй остальные монеты и не формируй новый рейтинг. Передай run_token в scanner только по сохранённому набору, затем вместе с scan_evidence_token вызови свежий snapshot каждого. На 1m потребуй свежий значимый LuxAlgo internal CHoCH; если последним событием уже стал BOS, проверь, что он продолжает ту же CHoCH-цепочку. BOS, displacement и завершённый откат/ретест усиливают вход. C2/C3 используй только как дополнительный контекст: их наличие не обязательно, а отсутствие не является veto. Проверь также опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — render_swisser_market_card в режиме entry с токенами текущего запуска. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Собери нейтральный обзор рынка без выбора лучших. Вызови scan_swisser_markets с mode=overview: scanner сам создаст свежий атомарный запуск и вернёт evidence_token. BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме overview с тем же evidence_token. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Найди лучшие сетапы на всём рынке. Вызови scan_swisser_markets с mode=setups: scanner сам создаст свежий атомарный запуск. Выбери действительно конкурентных кандидатов без заранее заданного количества. Затем одним вызовом get_swisser_candidate_snapshots передай evidence_token scanner и весь массив выбранных symbols; используй только новый evidence_token пакета. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме setups с последним evidence_token. Если конкурентных кандидатов нет, не вызывай snapshots и передай renderer токен scanner. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Вызови scan_swisser_markets с mode=entry и expected_symbols из сохранённого набора; scanner сам создаст свежий атомарный запуск. Не добавляй остальные монеты и не формируй новый рейтинг. Затем одним вызовом get_swisser_candidate_snapshots передай evidence_token scanner и весь сохранённый набор. На 1m потребуй свежий значимый LuxAlgo internal CHoCH; если последним событием уже стал BOS, проверь, что он продолжает ту же CHoCH-цепочку. BOS, displacement и завершённый откат/ретест усиливают вход. C2/C3 используй только как дополнительный контекст: их наличие не обязательно, а отсутствие не является veto. Проверь также опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме entry с новым evidence_token пакета. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
 ];
 
 export const COMMAND_LABELS = [
@@ -210,26 +209,324 @@ function sessionId(extra) {
   return extra?._meta?.["openai/session"] || null;
 }
 
-function sameSymbolSet(left, right) {
-  const a = [...new Set(left)].sort();
-  const b = [...new Set(right)].sort();
-  return a.length === b.length && a.every((symbol, index) => symbol === b[index]);
+function requestedSymbolsForMode(mode, expectedSymbols = []) {
+  const expected = [...new Set(expectedSymbols)];
+  if (mode === "entry") {
+    if (!expected.length) {
+      throw new Error(
+        "SWISSER integrity error: entry has no saved candidates; run «Лучшие сетапы» first",
+      );
+    }
+    return [...expected, BTC_SYMBOL];
+  }
+  if (expected.length) {
+    throw new Error("SWISSER integrity error: expected_symbols are only valid for entry");
+  }
+  return SUPPORTED_SYMBOLS;
 }
 
-function requestedSymbolsForRun(run, supplied = []) {
-  if (run.mode !== "entry") return SUPPORTED_SYMBOLS;
-  const suppliedTrades = [...new Set(supplied.filter((symbol) => symbol !== BTC_SYMBOL))];
-  const expected = run.expected_symbols || [];
-  if (expected.length && suppliedTrades.length && !sameSymbolSet(expected, suppliedTrades)) {
-    throw new Error("SWISSER integrity error: entry scanner symbols do not match saved candidates");
+function prune(value) {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (Array.isArray(value)) {
+    const items = value.map(prune).filter((item) => item !== undefined);
+    return items.length ? items : undefined;
   }
-  const tradeSymbols = expected.length ? expected : suppliedTrades;
-  if (!tradeSymbols.length) {
-    throw new Error(
-      "SWISSER integrity error: entry run has no saved candidates; run «Лучшие сетапы» first",
-    );
+  if (typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, prune(item)])
+      .filter(([, item]) => item !== undefined);
+    return entries.length ? Object.fromEntries(entries) : undefined;
   }
-  return [...tradeSymbols, BTC_SYMBOL];
+  return value;
+}
+
+function compactEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  return prune({
+    event_type: event.event_type ?? event.type ?? null,
+    direction: event.direction ?? null,
+    time: event.time ?? null,
+    time_utc: event.time_utc ?? null,
+    bars_since: event.bars_since ?? null,
+    broken_level: event.broken_level ?? event.broken_pivot?.level ?? null,
+  });
+}
+
+function compactLayer(layer, { includeRecent = false } = {}) {
+  if (!layer || typeof layer !== "object") return null;
+  return prune({
+    direction: layer.current_direction ?? null,
+    high: layer.current_high_level ?? layer.current_high?.level ?? null,
+    low: layer.current_low_level ?? layer.current_low?.level ?? null,
+    latest_event: compactEvent(layer.latest_event),
+    recent_events: includeRecent
+      ? (layer.recent_events || []).slice(-2).map(compactEvent)
+      : null,
+  });
+}
+
+function compactTrigger(trigger) {
+  if (!trigger || typeof trigger !== "object") return null;
+  return prune({
+    type: trigger.type ?? null,
+    direction: trigger.direction ?? null,
+    time: trigger.time ?? null,
+    time_utc: trigger.time_utc ?? null,
+    bars_since: trigger.bars_since ?? null,
+    is_fresh: trigger.is_fresh ?? null,
+    eq_respected: trigger.eq_respected ?? null,
+    quality: trigger.quality ?? null,
+  });
+}
+
+function compactCandle(candle) {
+  if (!candle || typeof candle !== "object") return null;
+  return Object.fromEntries(
+    ["time", "time_utc", "open", "high", "low", "close", "volume"]
+      .filter((key) => candle[key] !== undefined)
+      .map((key) => [key, candle[key]]),
+  );
+}
+
+function compactClosure(sequence) {
+  if (!sequence || typeof sequence !== "object") return null;
+  return prune({
+    state: sequence.state ?? null,
+    candle_number: sequence.candle_number ?? null,
+    direction: sequence.direction ?? null,
+    bars_since_c2: sequence.bars_since_c2 ?? null,
+    c3_confirmed: sequence.c3_confirmed ?? null,
+    c3_eq_respected: sequence.c3_eq_respected ?? null,
+  });
+}
+
+function compactBias(bias) {
+  if (!bias || typeof bias !== "object") return null;
+  return prune({
+    direction: bias.direction ?? null,
+    timeframe: bias.timeframe ?? null,
+    direction_source: bias.direction_source ?? null,
+    confidence: bias.confidence ?? null,
+    broad_context_direction: bias.broad_context_direction ?? null,
+    relation_to_broad_context: bias.relation_to_broad_context ?? null,
+    internal_conflicts: bias.internal_conflicts ?? [],
+  });
+}
+
+function compactScenario(scenario) {
+  if (!scenario || typeof scenario !== "object") return null;
+  return prune({
+    direction: scenario.direction ?? null,
+    label: scenario.label ?? null,
+    kind: scenario.kind ?? null,
+    priority: scenario.priority ?? null,
+    is_local_counter_1h: scenario.is_local_counter_1h ?? false,
+    requires_entry_confirmation: scenario.requires_entry_confirmation ?? null,
+    execution_state: scenario.execution_state ?? null,
+    trade_ready: scenario.trade_ready ?? null,
+    status: scenario.status ?? null,
+    reason: scenario.reason ?? null,
+    context_cautions: scenario.context_cautions ?? [],
+  });
+}
+
+function compactExecution(state) {
+  if (!state || typeof state !== "object") return null;
+  const confirmation = state.entry_structure_confirmation || {};
+  return prune({
+    state: state.state ?? null,
+    trade_ready: state.trade_ready ?? null,
+    preferred_direction: state.preferred_direction ?? null,
+    entry_direction: state.entry_timeframe_direction ?? null,
+    relation: state.relation_to_preference ?? null,
+    entry_structure_confirmation: {
+      confirmed: confirmation.confirmed ?? null,
+      expected_direction: confirmation.expected_direction ?? null,
+      freshness_rule_bars: confirmation.freshness_rule_bars ?? null,
+      type: confirmation.confirmation_type ?? null,
+      reason: confirmation.reason ?? null,
+      latest_event: compactEvent(confirmation.latest_event),
+      origin_choch: compactEvent(confirmation.origin_choch),
+    },
+    latest_entry_trigger: compactTrigger(state.latest_entry_trigger),
+    c2_c3_role: state.c2_c3_role ?? null,
+  });
+}
+
+function compactHourlyClosure(closure) {
+  if (!closure || typeof closure !== "object") return null;
+  return prune({
+    state: closure.state ?? null,
+    direction: closure.direction ?? null,
+    bars_since_c2: closure.bars_since_c2 ?? null,
+    c3_confirmed: closure.c3_confirmed ?? null,
+    c3_eq_respected: closure.c3_eq_respected ?? null,
+    latest_c2_time: closure.latest_c2_time ?? null,
+    latest_c2_time_utc: closure.latest_c2_time_utc ?? null,
+  });
+}
+
+function compactOppositeClosure(warning) {
+  if (!warning || typeof warning !== "object") return null;
+  if (warning.active !== true) return { active: false };
+  return prune({
+    active: warning.active ?? false,
+    direction: warning.direction ?? null,
+    bars_since_c2: warning.bars_since_c2 ?? null,
+    reason: warning.reason ?? null,
+  });
+}
+
+function compactDisplacement(event) {
+  if (!event || typeof event !== "object") return null;
+  return prune({
+    type: event.type ?? null,
+    direction: event.direction ?? null,
+    time: event.time ?? null,
+    time_utc: event.time_utc ?? null,
+    swept_side: event.swept_side ?? null,
+    closed_beyond: event.closed_beyond ?? null,
+  });
+}
+
+function compactHierarchy(hierarchy = {}) {
+  return prune({
+    broad_context_bias: compactBias(hierarchy.broad_context_bias),
+    higher_timeframe_bias: compactBias(hierarchy.higher_timeframe_bias),
+    session_timeframe_bias: compactBias(hierarchy.session_timeframe_bias),
+    setup_timeframe_bias: compactBias(hierarchy.setup_timeframe_bias),
+    entry_timeframe_bias: compactBias(hierarchy.entry_timeframe_bias),
+    hourly_closure_phase: compactHourlyClosure(hierarchy.hourly_closure_phase),
+    hourly_opposite_closure_warning: compactOppositeClosure(
+      hierarchy.hourly_opposite_closure_warning,
+    ),
+    alignment_state: hierarchy.alignment_state ?? null,
+    continuation_bias: {
+      direction: hierarchy.continuation_bias?.direction ?? null,
+      bias_direction: hierarchy.continuation_bias?.bias_direction ?? null,
+    },
+    active_trade_scenario: compactScenario(hierarchy.active_trade_scenario),
+    strategic_4h_context: {
+      direction: hierarchy.strategic_4h_context?.direction ?? null,
+      relation_to_working_direction:
+        hierarchy.strategic_4h_context?.relation_to_working_direction ?? null,
+      caution: hierarchy.strategic_4h_context?.caution ?? null,
+    },
+    execution_state: compactExecution(hierarchy.execution_state),
+    conflicts: (hierarchy.conflicts || []).map((conflict) => ({
+      scope: conflict.scope ?? null,
+      timeframe: conflict.timeframe ?? null,
+      higher_timeframe: conflict.higher_timeframe ?? null,
+      higher_direction: conflict.higher_direction ?? null,
+      lower_timeframe: conflict.lower_timeframe ?? null,
+      lower_direction: conflict.lower_direction ?? null,
+      type: conflict.type ?? null,
+    })),
+  });
+}
+
+function compactTimeframe(block = {}, signal = {}, { includeDetail = false } = {}) {
+  const structure = block.luxalgo_structure || {};
+  return prune({
+    primary_direction: signal.primary_direction ?? block.primary_direction ?? null,
+    confidence: signal.confidence ?? block.confidence ?? null,
+    structure_relation: signal.structure_relation ?? block.structure_relation ?? null,
+    luxalgo_structure: {
+      internal: compactLayer(structure.internal, { includeRecent: includeDetail }),
+      swing: compactLayer(structure.swing, { includeRecent: includeDetail }),
+    },
+    latest_trigger: compactTrigger(signal.latest_trigger ?? block.latest_trigger),
+    closure_sequence: compactClosure(signal.closure_sequence ?? block.closure_sequence),
+    opposite_closure_to_primary_direction: compactOppositeClosure(
+      signal.opposite_closure_to_primary_direction ??
+      block.opposite_closure_to_primary_direction,
+    ),
+    latest_sweep_displacement: compactDisplacement(
+      block.latest_sweep_displacement ??
+      (block.recent_sweep_displacement || []).at(-1),
+    ),
+    latest_live_candle: includeDetail ? compactCandle(block.latest_live_candle) : null,
+    latest_closed_candle: compactCandle(block.latest_closed_candle),
+    recent_closed_candles: includeDetail
+      ? (block.recent_closed_candles || []).slice(-3).map(compactCandle)
+      : null,
+  });
+}
+
+function compactScanTimeframe(block = {}, timeframe) {
+  const compact = compactTimeframe(block);
+  const includeClosure = timeframe !== "4h";
+  const includeDisplacement = timeframe === "15m" || timeframe === "1m";
+  return prune({
+    primary_direction: compact?.primary_direction,
+    confidence: compact?.confidence,
+    structure_relation: compact?.structure_relation,
+    luxalgo_structure: compact?.luxalgo_structure,
+    latest_trigger: includeClosure ? compact?.latest_trigger : null,
+    closure_sequence: includeClosure ? compact?.closure_sequence : null,
+    opposite_closure_to_primary_direction: includeClosure
+      ? compact?.opposite_closure_to_primary_direction
+      : null,
+    latest_sweep_displacement: includeDisplacement
+      ? compact?.latest_sweep_displacement
+      : null,
+  });
+}
+
+function compactScanForModel(data) {
+  return {
+    fetched_at_unix: data.fetched_at_unix,
+    fetched_at_utc: data.fetched_at_utc,
+    results: (data.results || []).map((item) => ({
+      symbol: item.symbol,
+      role: item.analysis_role,
+      current_price: item.current_price,
+      high_24h: item.high_24h,
+      low_24h: item.low_24h,
+      range_position_24h_percent: item.range_position_24h_percent,
+      higher_timeframe_levels: item.higher_timeframe_levels,
+      hierarchy: compactHierarchy(item.mtf_hierarchy),
+      timeframes: Object.fromEntries(
+        ["4h", "1h", "15m", "1m"].map((timeframe) => [
+          timeframe,
+          compactScanTimeframe(item.timeframe_summary?.[timeframe] || {}, timeframe),
+        ]),
+      ),
+    })),
+  };
+}
+
+function compactSnapshotForModel(data) {
+  const hierarchy = data.mtf_hierarchy || {};
+  const signals = hierarchy.timeframe_signals || {};
+  return {
+    symbol: data.symbol,
+    fetched_at_unix: data.fetched_at_unix,
+    fetched_at_utc: data.fetched_at_utc,
+    current_price: data.current_price,
+    high_24h: data.high_24h,
+    low_24h: data.low_24h,
+    higher_timeframe_levels: data.higher_timeframe_levels,
+    hierarchy: compactHierarchy(hierarchy),
+    timeframes: Object.fromEntries(
+      ["4h", "1h", "15m", "1m"].map((timeframe) => [
+        timeframe,
+        compactTimeframe(
+          data.timeframes?.[timeframe] || {},
+          signals[timeframe] || {},
+          { includeDetail: true },
+        ),
+      ]),
+    ),
+  };
+}
+
+async function fetchFreshSnapshot(symbol, scanSourceMs) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const data = await fetchSwisser("/api/snapshot_action_v6", { symbol });
+    if (Number(data?.fetched_at_unix) * 1000 >= scanSourceMs) return data;
+  }
+  throw new Error(`SWISSER integrity error: snapshot ${symbol} stayed older than scanner`);
 }
 
 function commandPayloads(card) {
@@ -258,11 +555,13 @@ export function createSwisserMcpServer() {
     ],
   }, {
     instructions:
-      "ОБЯЗАТЕЛЬНО: каждый рыночный запуск SWISSER начинай с start_swisser_run и используй выданный run_token " +
-      "во всех последующих инструментах этого запуска. Передавай все opaque-токены дословно из structuredContent: " +
-      "не пересказывай, не сокращай и не реконструируй их. Не смешивай токены разных запусков. Каждый завершённый " +
-      "рыночный анализ заканчивай вызовом render_swisser_market_card с scan_evidence_token и всеми нужными " +
-      "snapshot_evidence_tokens; без проверенного свежего evidence renderer обязан отказать. Структура, цены и " +
+      "ОБЯЗАТЕЛЬНО: каждый рыночный запуск SWISSER начинай одним scan_swisser_markets с нужным mode; scanner сам " +
+      "создаёт новый атомарный запуск. В каждый следующий инструмент передавай только один evidence_token дословно " +
+      "из structuredContent последнего успешного этапа. Других token-полей в текущем протоколе нет. " +
+      "Для setups и entry получай все нужные snapshots одним " +
+      "get_swisser_candidate_snapshots и затем сразу вызывай render_swisser_market_card с новым evidence_token пакета. " +
+      "Для overview передавай renderer токен scanner. При технической ошибке допустим только один полностью новый " +
+      "scanner-проход; не накапливай параллельные запуски. Без проверенного свежего evidence renderer обязан отказать. Структура, цены и " +
       "время среза в карточке являются серверными полями: не передавай и не подменяй их вручную. " +
       "Обычная Markdown-таблица, список или PNG не заменяют renderer. После вызова не дублируй карточку текстом. " +
       "Точный запрос «1» означает режим overview («Обзор рынка»), «2» — setups («Лучшие сетапы»), " +
@@ -291,70 +590,21 @@ export function createSwisserMcpServer() {
       "движение после среза, а не PnL сделки. Один эпизод не меняет веса ранжирования без серии наблюдений.",
   });
 
-  registerAppTool(
-    server,
-    "start_swisser_run",
-    {
-      title: "Начать свежий запуск SWISSER",
-      description:
-        "Создаёт токен одного запуска. Всегда вызывай непосредственно перед scanner для overview, setups или entry. " +
-        "Для entry передай ровно кандидатов из " +
-        "последней карточки setups; для overview/setups expected_symbols должен быть пустым.",
-      inputSchema: {
-        mode: z.enum(["overview", "setups", "entry"]),
-        expected_symbols: z
-          .array(z.enum(TRADE_SYMBOLS))
-          .optional()
-          .describe("Только для entry: сохранённые кандидаты предыдущей карточки setups."),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-      },
-      _meta: {
-        ui: { visibility: ["model", "app"] },
-        "openai/widgetAccessible": true,
-      },
-    },
-    async ({ mode, expected_symbols = [] }, extra) => {
-      const { token, payload } = createRunToken({
-        mode,
-        expectedSymbols: expected_symbols,
-        session: sessionId(extra),
-      });
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Свежий запуск SWISSER создан. Передай run_token в scanner, snapshot и финальный renderer; не заменяй его токеном другого запуска.",
-          },
-        ],
-        structuredContent: {
-          run_token: token,
-          run_id: payload.run_id,
-          mode: payload.mode,
-          expected_symbols: payload.expected_symbols,
-          expires_at_unix: Math.floor(payload.exp / 1000),
-        },
-      };
-    },
-  );
-
   server.registerTool(
     "scan_swisser_markets",
     {
       title: "Сканировать рынок SWISSER",
       description:
-        "Получает scanner только внутри текущего start_swisser_run и возвращает подписанный scan_evidence_token. " +
-        "В overview/setups сервер всегда сканирует все шесть торговых монет плюс BTC. В entry — только сохранённых " +
-        "кандидатов плюс BTC. Для текущего сценария используй active_trade_scenario, не continuation_bias.",
+        "Сам создаёт один свежий атомарный запуск и возвращает единственный evidence_token. В overview/setups " +
+        "сервер всегда сканирует все шесть торговых монет плюс BTC. В entry передай ровно сохранённых кандидатов " +
+        "последней карточки setups. Для текущего сценария используй active_trade_scenario, не continuation_bias.",
       inputSchema: {
-        run_token: z.string().min(20).describe("Токен текущего start_swisser_run."),
-        symbols: z
-          .array(z.enum(SUPPORTED_SYMBOLS))
+        mode: z.enum(["overview", "setups", "entry"]),
+        expected_symbols: z
+          .array(z.enum(TRADE_SYMBOLS))
+          .max(6)
           .optional()
-          .describe("Только для entry без привязанного списка; overview/setups всегда принудительно полные."),
+          .describe("Только для entry: кандидаты последней карточки «Лучшие сетапы»."),
       },
       annotations: {
         readOnlyHint: true,
@@ -362,35 +612,52 @@ export function createSwisserMcpServer() {
         openWorldHint: true,
       },
     },
-    async ({ run_token, symbols = [] }, extra) => {
-      const run = verifyRunToken(run_token, { session: sessionId(extra) });
-      const requestedSymbols = requestedSymbolsForRun(run, symbols);
+    async ({ mode, expected_symbols = [] }, extra) => {
+      const canonical = canonicalMode(mode);
+      const requestedSymbols = requestedSymbolsForMode(canonical, expected_symbols);
       const data = await fetchSwisser("/api/scanner_action_v6", {
         symbols: requestedSymbols.join(","),
       });
-      const evidence = createScanEvidenceToken({ run, data, requestedSymbols });
+      const evidence = createScanWorkflowEvidence({
+        mode: canonical,
+        expectedSymbols: expected_symbols,
+        session: sessionId(extra),
+        data,
+        requestedSymbols,
+      });
       return {
-        content: [{ type: "text", text: "Свежий SWISSER scanner проверен. Передай run_token и scan_evidence_token в snapshots и финальный renderer." }],
+        content: [{
+          type: "text",
+          text:
+            canonical === "overview"
+              ? "Свежий обзорный scanner проверен. Сразу передай evidence_token в renderer."
+              : "Свежий scanner проверен. Выбери кандидатов и одним вызовом получи пакет snapshots, передав этот evidence_token.",
+        }],
         structuredContent: {
-          ...data,
-          run_id: run.run_id,
-          scan_evidence_token: evidence.token,
+          evidence_token: evidence.token,
+          scan: compactScanForModel(data),
         },
       };
     },
   );
 
   server.registerTool(
-    "get_swisser_market_snapshot",
+    "get_swisser_candidate_snapshots",
     {
-      title: "Проверить кандидата SWISSER",
+      title: "Проверить кандидатов SWISSER одним пакетом",
       description:
-        "Получает snapshot только после scanner того же запуска. Snapshot старше scanner отклоняется, а успешный " +
-        "ответ получает snapshot_evidence_token для финального renderer. Не вызывай в overview.",
+        "После scanner получает все выбранные snapshots одним вызовом и возвращает один новый атомарный " +
+        "evidence_token, содержащий scanner и весь пакет кандидатов. Для entry symbols должны точно совпасть с " +
+        "сохранённым набором. Не вызывай в overview.",
       inputSchema: {
-        run_token: z.string().min(20).describe("Токен текущего start_swisser_run."),
-        scan_evidence_token: z.string().min(20).describe("Токен scanner текущего запуска."),
-        symbol: z.enum(TRADE_SYMBOLS).describe("Символ кандидата, например TAO_USDT."),
+        evidence_token: z.string().min(20).describe("Единственный токен текущего scanner."),
+        symbols: z
+          .array(z.enum(TRADE_SYMBOLS))
+          .min(1)
+          .max(6)
+          .refine((symbols) => new Set(symbols).size === symbols.length, {
+            message: "symbols must not contain duplicates",
+          }),
       },
       annotations: {
         readOnlyHint: true,
@@ -398,30 +665,38 @@ export function createSwisserMcpServer() {
         openWorldHint: true,
       },
     },
-    async ({ run_token, scan_evidence_token, symbol }, extra) => {
-      const run = verifyRunToken(run_token, { session: sessionId(extra) });
-      if (run.mode === "overview") {
+    async ({ evidence_token, symbols }, extra) => {
+      const workflow = verifyWorkflowEvidenceToken(evidence_token, {
+        stage: "scan",
+        session: sessionId(extra),
+      });
+      if (workflow.mode === "overview") {
         throw new Error("SWISSER integrity error: overview must not use snapshots");
       }
-      const scan = verifyScanEvidenceToken(scan_evidence_token, { run });
-      let data;
-      let evidence;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        data = await fetchSwisser("/api/snapshot_action_v6", { symbol });
-        try {
-          evidence = createSnapshotEvidenceToken({ run, scan, data, symbol });
-          break;
-        } catch (error) {
-          if (attempt === 0 && /older than the current scanner/.test(error.message)) continue;
-          throw error;
-        }
+      const dataBySymbol = new Map();
+      for (let index = 0; index < symbols.length; index += 3) {
+        const batch = symbols.slice(index, index + 3);
+        const results = await Promise.all(
+          batch.map(async (symbol) => [
+            symbol,
+            await fetchFreshSnapshot(symbol, workflow.scan.source_ms),
+          ]),
+        );
+        for (const [symbol, data] of results) dataBySymbol.set(symbol, data);
       }
+      const evidence = createSnapshotBundleEvidence({
+        workflow,
+        dataBySymbol,
+        symbols,
+      });
       return {
-        content: [{ type: "text", text: `Свежий snapshot ${symbol} проверен. Передай snapshot_evidence_token в renderer этого же запуска.` }],
+        content: [{
+          type: "text",
+          text: "Единый пакет snapshots проверен. Сразу передай новый evidence_token в renderer; токен scanner больше не используй.",
+        }],
         structuredContent: {
-          ...data,
-          run_id: run.run_id,
-          snapshot_evidence_token: evidence.token,
+          evidence_token: evidence.token,
+          snapshots: symbols.map((symbol) => compactSnapshotForModel(dataBySymbol.get(symbol))),
         },
       };
     },
@@ -433,8 +708,8 @@ export function createSwisserMcpServer() {
     {
       title: "Показать проверенную карточку рынка SWISSER",
       description:
-        "Финальный renderer с жёсткой проверкой происхождения данных. Требует run_token и scan_evidence_token одного " +
-        "текущего запуска; каждый торговый кандидат в setups и каждая строка entry требуют свежий snapshot token. " +
+        "Финальный renderer с жёсткой проверкой происхождения данных. Принимает ровно один evidence_token: scanner " +
+        "для overview или отсутствия кандидатов в setups; атомарный snapshot-пакет для кандидатов setups и всего entry. " +
         "Цена, 4h/1h/15m/1m, активная идея, BTC и время карточки строятся сервером из evidence и не принимаются " +
         "от модели. В overview — шесть монет без кандидатов; в setups — шесть монет и любое число реальных " +
         "кандидатов; в entry — только сохранённый набор. Не показывай RR.",
@@ -442,9 +717,7 @@ export function createSwisserMcpServer() {
         mode: z
           .enum(["overview", "setups", "entry", "quick", "trades", "day"])
           .describe("Используй overview, setups или entry; старые aliases сохранены для совместимости."),
-        run_token: z.string().min(20),
-        scan_evidence_token: z.string().min(20),
-        snapshot_evidence_tokens: z.array(z.string().min(20)).max(6),
+        evidence_token: z.string().min(20).describe("Последний атомарный токен текущего этапа."),
         lead: z.string().min(1).max(180).describe("Один главный вывод над таблицей."),
         market_rows: z
           .array(
@@ -478,7 +751,7 @@ export function createSwisserMcpServer() {
               }),
           )
           .max(6)
-          .describe("Пусто для overview; каждый кандидат требует snapshot token текущего запуска."),
+          .describe("Пусто для overview; каждый кандидат должен входить в атомарный snapshot-пакет."),
         conclusion: z.string().min(1).max(420),
       },
       annotations: {
@@ -495,9 +768,7 @@ export function createSwisserMcpServer() {
     },
     async (input, extra) => {
       const card = buildVerifiedCard({
-        runToken: input.run_token,
-        scanEvidenceToken: input.scan_evidence_token,
-        snapshotEvidenceTokens: input.snapshot_evidence_tokens,
+        evidenceToken: input.evidence_token,
         mode: canonicalMode(input.mode),
         lead: input.lead,
         marketRows: input.market_rows,

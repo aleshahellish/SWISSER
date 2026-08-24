@@ -8,9 +8,7 @@ from luxalgo_structure import (
 )
 from api import (
     scanner_action_v6,
-    scanner_v6,
     snapshot_action_v6,
-    snapshot_v6,
 )
 
 
@@ -98,13 +96,11 @@ class LuxAlgoStructureTests(unittest.TestCase):
             },
         )
 
-    def test_all_four_endpoints_share_the_same_luxalgo_detector(self):
-        self.assertIs(scanner_v6.luxalgo_market_structure, luxalgo_market_structure)
+    def test_active_endpoints_share_the_same_luxalgo_detector(self):
         self.assertIs(
             scanner_action_v6.luxalgo_market_structure,
             luxalgo_market_structure,
         )
-        self.assertIs(snapshot_v6.luxalgo_market_structure, luxalgo_market_structure)
         self.assertIs(
             snapshot_action_v6.luxalgo_market_structure,
             luxalgo_market_structure,

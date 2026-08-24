@@ -1,6 +1,6 @@
 import unittest
 
-from api import scanner_action_v6, scanner_v6, snapshot_action_v6, snapshot_v6
+from api import scanner_action_v6, snapshot_action_v6
 import mtf_decision
 from mtf_decision import build_mtf_decision
 
@@ -54,9 +54,7 @@ BROAD_BULLISH = {"direction": "BULLISH"}
 class MtfDecisionTests(unittest.TestCase):
     def test_all_endpoints_use_the_shared_decision_layer(self):
         for module in (
-            scanner_v6,
             scanner_action_v6,
-            snapshot_v6,
             snapshot_action_v6,
         ):
             self.assertIs(

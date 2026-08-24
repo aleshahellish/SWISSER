@@ -6,9 +6,6 @@ import handler, { COMMAND_LABELS, COMMANDS } from "../api/mcp.js";
 import {
   BTC_SYMBOL,
   TRADE_SYMBOLS,
-  createScanEvidenceToken,
-  createSnapshotEvidenceToken,
-  verifyRunToken,
 } from "../swisser_evidence.js";
 
 async function startServer() {
@@ -91,11 +88,15 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.7.3");
-  assert.match(initialized.result.instructions, /каждый рыночный запуск SWISSER начинай с start_swisser_run/);
-  assert.match(initialized.result.instructions, /opaque-токены дословно из structuredContent/);
-  assert.match(initialized.result.instructions, /Не смешивай токены разных запусков/);
-  assert.match(initialized.result.instructions, /без проверенного свежего evidence renderer обязан отказать/);
+  assert.equal(initialized.result.serverInfo.version, "1.8.0");
+  assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
+  assert.match(initialized.result.instructions, /только один evidence_token/);
+  assert.match(initialized.result.instructions, /одним get_swisser_candidate_snapshots/);
+  assert.doesNotMatch(
+    initialized.result.instructions,
+    /start_swisser_run|get_swisser_market_snapshot|run_token|scan_evidence_token|snapshot_evidence_token/,
+  );
+  assert.match(initialized.result.instructions, /[Бб]ез проверенного свежего evidence renderer обязан отказать/);
   assert.match(initialized.result.instructions, /«3» — entry/);
   assert.match(initialized.result.instructions, /последнего результата «Лучшие сетапы»/);
   assert.match(initialized.result.instructions, /исходный срез и исходный рейтинг/);
@@ -103,29 +104,35 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
 
   const tools = await rpc(url, 2, "tools/list");
   assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
-    "start_swisser_run",
     "scan_swisser_markets",
-    "get_swisser_market_snapshot",
+    "get_swisser_candidate_snapshots",
     "render_swisser_market_card",
     "open_swisser_controls",
   ]);
-  assert.deepEqual(tools.result.tools[0]._meta.ui.visibility, ["model", "app"]);
-  assert.equal(tools.result.tools[0]._meta["openai/widgetAccessible"], true);
-  assert.equal(
-    tools.result.tools[4]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.7.3.html",
-  );
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v5.html",
+    "ui://swisser/market-controls/1.8.0.html",
   );
-  const rendererProperties = tools.result.tools[3].inputSchema.properties;
+  assert.equal(
+    tools.result.tools[2]._meta["openai/outputTemplate"],
+    "ui://swisser/market-card-v6.html",
+  );
+  const scannerProperties = tools.result.tools[0].inputSchema.properties;
+  assert.ok(scannerProperties.mode);
+  assert.ok(scannerProperties.expected_symbols);
+  assert.equal(scannerProperties.run_token, undefined);
+  const snapshotProperties = tools.result.tools[1].inputSchema.properties;
+  assert.ok(snapshotProperties.evidence_token);
+  assert.ok(snapshotProperties.symbols);
+  assert.equal(snapshotProperties.scan_evidence_token, undefined);
+  const rendererProperties = tools.result.tools[2].inputSchema.properties;
   assert.equal(rendererProperties.cut_time, undefined);
   assert.equal(rendererProperties.btc_price, undefined);
   assert.equal(rendererProperties.btc_structure, undefined);
-  assert.ok(rendererProperties.run_token);
-  assert.ok(rendererProperties.scan_evidence_token);
-  assert.ok(rendererProperties.snapshot_evidence_tokens);
+  assert.ok(rendererProperties.evidence_token);
+  assert.equal(rendererProperties.run_token, undefined);
+  assert.equal(rendererProperties.scan_evidence_token, undefined);
+  assert.equal(rendererProperties.snapshot_evidence_tokens, undefined);
   const rowProperties = rendererProperties.market_rows.items.properties;
   for (const forbidden of ["price", "idea", "h4", "h1", "m15", "m1"]) {
     assert.equal(rowProperties[forbidden], undefined);
@@ -141,7 +148,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.7.3.html",
+    uri: "ui://swisser/market-controls/1.8.0.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -152,7 +159,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     assert.match(command, /ОБЯЗАТЕЛЬНЫЙ финальный шаг/);
     assert.match(command, /Не создавай Markdown-таблицу или PNG вместо renderer/);
   }
-  assert.doesNotMatch(controlsHtml, /callTool\("start_swisser_run"/);
+  assert.doesNotMatch(controlsHtml, /start_swisser_run/);
   assert.doesNotMatch(controlsHtml, /SWISSER_RUN_TOKEN/);
   assert.match(controlsHtml, /data-mode="overview"/);
   assert.match(controlsHtml, /sendFollowUpMessage/);
@@ -160,12 +167,13 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assertEmbeddedScriptParses(controlsHtml);
   assert.deepEqual(COMMAND_LABELS, ["Обзор рынка", "Лучшие сетапы", "Проверить вход"]);
   assert.match(COMMANDS[0], /не ранжируй их/);
-  assert.match(COMMANDS[1], /Не задавай количество заранее/);
+  assert.match(COMMANDS[1], /без заранее заданного количества/);
   assert.match(COMMANDS[2], /только по кандидатам из последнего результата «Лучшие сетапы»/);
   assert.match(COMMANDS[2], /свежий значимый LuxAlgo internal CHoCH/);
   assert.match(COMMANDS[2], /отсутствие не является veto/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.8.0.html",
     "ui://swisser/market-controls/1.7.3.html",
     "ui://swisser/market-controls/1.7.1.html",
     "ui://swisser/market-controls/1.7.0.html",
@@ -180,6 +188,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     "ui://swisser/market-controls-v1.html",
   ];
   const supportedCards = [
+    "ui://swisser/market-card-v6.html",
     "ui://swisser/market-card-v5.html",
     "ui://swisser/market-card-v4.html",
     "ui://swisser/market-card-v3.html",
@@ -192,40 +201,75 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     [...supportedControls, ...supportedCards],
   );
 
-  const runCall = await rpc(url, 6, "tools/call", {
-    name: "start_swisser_run",
-    arguments: { mode: "setups", expected_symbols: [] },
-  });
-  assert.equal(runCall.result.structuredContent.mode, "setups");
-  const runToken = runCall.result.structuredContent.run_token;
-  const run = verifyRunToken(runToken, { mode: "setups" });
   const scanTime = Date.now();
   const symbols = [...TRADE_SYMBOLS, BTC_SYMBOL];
-  const scan = createScanEvidenceToken({
-    run,
-    data: scannerData(symbols, scanTime),
-    requestedSymbols: symbols,
-    now: scanTime,
+  const realFetch = globalThis.fetch;
+  const upstreamCalls = [];
+  globalThis.fetch = async (input, options) => {
+    const target = input instanceof URL
+      ? input
+      : new URL(typeof input === "string" ? input : input.url);
+    if (target.hostname === "tao-mexc-live.vercel.app") {
+      upstreamCalls.push(target.pathname);
+      let body;
+      if (target.pathname === "/api/scanner_action_v6") {
+        body = scannerData(symbols, scanTime);
+      } else if (target.pathname === "/api/snapshot_action_v6") {
+        const symbol = target.searchParams.get("symbol");
+        body = snapshotData(symbol, scanTime + 1_000);
+      } else {
+        throw new Error(`Unexpected upstream path ${target.pathname}`);
+      }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return realFetch(input, options);
+  };
+  t.after(() => {
+    globalThis.fetch = realFetch;
   });
-  const sol = createSnapshotEvidenceToken({
-    run,
-    scan: scan.payload,
-    data: snapshotData("SOL_USDT", scanTime + 1_000),
-    symbol: "SOL_USDT",
-    now: scanTime + 1_000,
+
+  const scanned = await rpc(url, 6, "tools/call", {
+    name: "scan_swisser_markets",
+    arguments: { mode: "setups", expected_symbols: [] },
   });
-  const hype = createSnapshotEvidenceToken({
-    run,
-    scan: scan.payload,
-    data: snapshotData("HYPE_USDT", scanTime + 1_100),
-    symbol: "HYPE_USDT",
-    now: scanTime + 1_100,
+  assert.match(scanned.result.structuredContent.evidence_token, /^z2\./);
+  assert.deepEqual(Object.keys(scanned.result.structuredContent).sort(), [
+    "evidence_token",
+    "scan",
+  ]);
+  assert.ok(
+    scanned.result.structuredContent.scan.results[0].hierarchy.active_trade_scenario,
+  );
+  assert.equal(
+    scanned.result.structuredContent.scan.results[0].hierarchy.active_scenario,
+    undefined,
+  );
+  assert.equal(scanned.result.structuredContent.run_token, undefined);
+
+  const bundled = await rpc(url, 7, "tools/call", {
+    name: "get_swisser_candidate_snapshots",
+    arguments: {
+      evidence_token: scanned.result.structuredContent.evidence_token,
+      symbols: ["SOL_USDT", "HYPE_USDT"],
+    },
   });
+  assert.equal(bundled.result.structuredContent.snapshots.length, 2);
+  assert.deepEqual(Object.keys(bundled.result.structuredContent).sort(), [
+    "evidence_token",
+    "snapshots",
+  ]);
+  assert.deepEqual(upstreamCalls, [
+    "/api/scanner_action_v6",
+    "/api/snapshot_action_v6",
+    "/api/snapshot_action_v6",
+  ]);
+
   const cardInput = {
     mode: "setups",
-    run_token: runToken,
-    scan_evidence_token: scan.token,
-    snapshot_evidence_tokens: [sol.token, hype.token],
+    evidence_token: bundled.result.structuredContent.evidence_token,
     lead: "Два равноценных сетапа",
     market_rows: TRADE_SYMBOLS.map((symbol) => ({
       symbol: symbol.replace("_USDT", ""),
@@ -243,7 +287,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     })),
     conclusion: "Оба сетапа остаются равноправными до 1m подтверждения.",
   };
-  const rendered = await rpc(url, 7, "tools/call", {
+  const rendered = await rpc(url, 8, "tools/call", {
     name: "render_swisser_market_card",
     arguments: cardInput,
   });
@@ -259,8 +303,8 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     ["overview", "setups", "entry"],
   );
 
-  const cardResource = await rpc(url, 8, "resources/read", {
-    uri: "ui://swisser/market-card-v5.html",
+  const cardResource = await rpc(url, 9, "resources/read", {
+    uri: "ui://swisser/market-card-v6.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Потенц\. PnL 6x/);

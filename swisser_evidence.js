@@ -11,17 +11,16 @@ export const TRADE_SYMBOLS = [
 ];
 export const BTC_SYMBOL = "BTC_USDT";
 export const SUPPORTED_SYMBOLS = [...TRADE_SYMBOLS, BTC_SYMBOL];
-// A run token is a workflow envelope, not market evidence. It must survive
-// ChatGPT queueing and reasoning before the first scanner call.
-export const RUN_TTL_MS = 600_000;
-// Market evidence stays short-lived from the moment the scanner actually ran.
-export const EVIDENCE_TTL_MS = 180_000;
 
-const TOKEN_VERSION = 1;
-const TOKEN_FORMAT = "z1";
-const MAX_ENCODED_TOKEN_PAYLOAD_LENGTH = 8_192;
-const MAX_DECODED_TOKEN_PAYLOAD_LENGTH = 32_768;
-const SOURCE_START_TOLERANCE_MS = 15_000;
+// One atomic workflow token replaces the former run + scan + N snapshot tokens.
+// Five minutes is long enough for ChatGPT reasoning while keeping a 1m entry cut fresh.
+export const EVIDENCE_TTL_MS = 300_000;
+
+const TOKEN_VERSION = 2;
+const TOKEN_FORMAT = "z2";
+const MAX_ENCODED_TOKEN_PAYLOAD_LENGTH = 12_288;
+const MAX_DECODED_TOKEN_PAYLOAD_LENGTH = 49_152;
+const SOURCE_AGE_TOLERANCE_MS = 90_000;
 const FUTURE_CLOCK_TOLERANCE_MS = 15_000;
 const TOKEN_SECRET =
   process.env.SWISSER_EVIDENCE_SECRET ??
@@ -77,61 +76,54 @@ function constantTimeEqual(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function decodeToken(token, expectedType, now = Date.now()) {
+function decodeWorkflowToken(token, now = Date.now()) {
   const parts = String(token || "").split(".");
-  let encodedPayload;
-  let suppliedSignature;
-  let signedPayload;
-  let compressed = false;
-
-  if (parts.length === 3 && parts[0] === TOKEN_FORMAT) {
-    [, encodedPayload, suppliedSignature] = parts;
-    signedPayload = `${TOKEN_FORMAT}.${encodedPayload}`;
-    compressed = true;
-  } else if (parts.length === 2) {
-    // Accept tokens issued before compact format z1 so an in-flight run is not
-    // broken during a deployment.
-    [encodedPayload, suppliedSignature] = parts;
-    signedPayload = encodedPayload;
-  } else {
-    fail(`malformed ${expectedType} token`);
+  if (parts.length !== 3 || parts[0] !== TOKEN_FORMAT) {
+    if (parts[0] === "z1") {
+      fail("obsolete evidence token; refresh SWISSER and start a new analysis");
+    }
+    fail("malformed workflow token");
   }
 
+  const [, encodedPayload, suppliedSignature] = parts;
   if (
     !encodedPayload ||
     !suppliedSignature ||
     encodedPayload.length > MAX_ENCODED_TOKEN_PAYLOAD_LENGTH
   ) {
-    fail(`malformed ${expectedType} token`);
+    fail("malformed workflow token");
   }
+
+  const signedPayload = `${TOKEN_FORMAT}.${encodedPayload}`;
   if (!constantTimeEqual(signature(signedPayload), suppliedSignature)) {
-    fail(`invalid ${expectedType} token signature`);
+    fail("invalid workflow token signature");
   }
 
   let payload;
   try {
-    const bytes = Buffer.from(encodedPayload, "base64url");
-    const json = compressed
-      ? inflateRawSync(bytes, { maxOutputLength: MAX_DECODED_TOKEN_PAYLOAD_LENGTH }).toString(
-          "utf8",
-        )
-      : bytes.toString("utf8");
+    const json = inflateRawSync(Buffer.from(encodedPayload, "base64url"), {
+      maxOutputLength: MAX_DECODED_TOKEN_PAYLOAD_LENGTH,
+    }).toString("utf8");
     if (json.length > MAX_DECODED_TOKEN_PAYLOAD_LENGTH) {
-      fail(`invalid ${expectedType} token payload`);
+      fail("invalid workflow token payload");
     }
     payload = JSON.parse(json);
   } catch {
-    fail(`invalid ${expectedType} token payload`);
+    fail("invalid workflow token payload");
   }
 
-  if (payload.v !== TOKEN_VERSION || payload.type !== expectedType) {
-    fail(`expected ${expectedType} token`);
+  if (payload.v !== TOKEN_VERSION || payload.type !== "workflow") {
+    fail("expected current workflow token");
   }
   if (!Number.isFinite(payload.iat) || !Number.isFinite(payload.exp)) {
-    fail("token has no valid lifetime");
+    fail("workflow token has no valid lifetime");
   }
-  if (payload.iat > now + FUTURE_CLOCK_TOLERANCE_MS) fail("token is from the future");
-  if (payload.exp < now) fail("evidence token expired; collect a new market cut");
+  if (payload.iat > now + FUTURE_CLOCK_TOLERANCE_MS) {
+    fail("workflow token is from the future");
+  }
+  if (payload.exp < now) {
+    fail("workflow evidence expired; collect one new market cut");
+  }
   return payload;
 }
 
@@ -153,22 +145,26 @@ function assertSameSet(actual, expected, label) {
   const left = [...actual].sort();
   const right = [...expected].sort();
   if (left.length !== right.length || left.some((value, index) => value !== right[index])) {
-    fail(`${label} symbols do not match the current run`);
+    fail(`${label} symbols do not match`);
   }
 }
 
 function sourceTimeMs(data, label) {
   const seconds = Number(data?.fetched_at_unix);
-  if (!Number.isFinite(seconds) || seconds <= 0) fail(`${label} has no valid fetched_at_unix`);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    fail(`${label} has no valid fetched_at_unix`);
+  }
   return Math.round(seconds * 1000);
 }
 
-function assertFreshSource(data, run, now, label) {
-  const sourceMs = sourceTimeMs(data, label);
-  if (sourceMs < run.iat - SOURCE_START_TOLERANCE_MS) {
-    fail(`${label} predates the current run`);
+function assertNewScanSource(data, now) {
+  const sourceMs = sourceTimeMs(data, "scanner");
+  if (sourceMs < now - SOURCE_AGE_TOLERANCE_MS) {
+    fail("scanner response is not a fresh market cut");
   }
-  if (sourceMs > now + FUTURE_CLOCK_TOLERANCE_MS) fail(`${label} is from the future`);
+  if (sourceMs > now + FUTURE_CLOCK_TOLERANCE_MS) {
+    fail("scanner is from the future");
+  }
   return sourceMs;
 }
 
@@ -216,6 +212,7 @@ function summarizeMarketItem(item) {
       fail(`market row ${item.symbol} has no ${key}`);
     }
   }
+
   const active = hierarchy.active_trade_scenario || {};
   const continuation = hierarchy.continuation_bias || {};
   const allowedDirections = new Set();
@@ -245,138 +242,144 @@ function summarizeMarketItem(item) {
   };
 }
 
-export function createRunToken({
+function validateModeSymbols(mode, expectedSymbols, requestedSymbols) {
+  const expected = uniqueSymbols(expectedSymbols, { tradeOnly: true });
+  const requested = uniqueSymbols(requestedSymbols);
+  if (mode === "entry") {
+    if (!expected.length) {
+      fail("entry has no saved candidates; run «Лучшие сетапы» first");
+    }
+    assertSameSet(requested, [...expected, BTC_SYMBOL], "entry scanner");
+  } else {
+    if (expected.length) fail("expected symbols are only valid for entry");
+    assertSameSet(requested, SUPPORTED_SYMBOLS, `${mode} scanner`);
+  }
+  return { expected, requested };
+}
+
+export function createScanWorkflowEvidence({
   mode,
   expectedSymbols = [],
   session = null,
+  data,
+  requestedSymbols,
   now = Date.now(),
   runId = randomUUID(),
 } = {}) {
   const canonical = canonicalMode(mode);
-  const expected = uniqueSymbols(expectedSymbols, { tradeOnly: true });
-  if (canonical !== "entry" && expected.length) {
-    fail("expected symbols are only valid for an entry run");
-  }
-  const payload = {
-    v: TOKEN_VERSION,
-    type: "run",
-    run_id: runId,
-    mode: canonical,
-    expected_symbols: expected,
-    session: sessionBinding(session),
-    iat: now,
-    exp: now + RUN_TTL_MS,
-  };
-  return { token: encodeToken(payload), payload };
-}
-
-export function verifyRunToken(token, { mode, session = null, now = Date.now() } = {}) {
-  const payload = decodeToken(token, "run", now);
-  assertSession(payload, session);
-  if (mode && payload.mode !== canonicalMode(mode)) fail("run mode mismatch");
-  return payload;
-}
-
-export function createScanEvidenceToken({
-  run,
-  data,
-  requestedSymbols,
-  now = Date.now(),
-} = {}) {
+  const { expected, requested } = validateModeSymbols(
+    canonical,
+    expectedSymbols,
+    requestedSymbols,
+  );
   if (!data || data.ok !== true || data.mode !== "swisser_gpt_scan") {
     fail("scanner response is unsuccessful or has the wrong mode");
   }
-  if (!Array.isArray(data.results) || !data.results.length) fail("scanner returned no rows");
-  const requested = uniqueSymbols(requestedSymbols);
+  if (!Array.isArray(data.results) || !data.results.length) {
+    fail("scanner returned no rows");
+  }
   if ((data.requested_symbols || []).length !== requested.length) {
     fail("scanner response has missing or duplicate requested symbols");
   }
   if (data.results.length !== requested.length) {
     fail("scanner result has missing or duplicate rows");
   }
-  const responseRequested = uniqueSymbols(data.requested_symbols || []);
-  assertSameSet(responseRequested, requested, "scanner response");
-  const resultSymbols = uniqueSymbols(data.results.map((item) => item?.symbol));
-  assertSameSet(resultSymbols, requested, "scanner result");
-  const sourceMs = assertFreshSource(data, run, now, "scanner");
+  assertSameSet(uniqueSymbols(data.requested_symbols || []), requested, "scanner response");
+  assertSameSet(
+    uniqueSymbols(data.results.map((item) => item?.symbol)),
+    requested,
+    "scanner result",
+  );
 
+  const sourceMs = assertNewScanSource(data, now);
   const summaries = Object.fromEntries(
     data.results.map((item) => [item.symbol, summarizeMarketItem(item)]),
   );
   const payload = {
     v: TOKEN_VERSION,
-    type: "scan",
-    run_id: run.run_id,
-    mode: run.mode,
+    type: "workflow",
+    stage: "scan",
+    run_id: runId,
+    mode: canonical,
+    expected_symbols: expected,
     requested_symbols: requested,
-    source_ms: sourceMs,
-    summaries,
+    scan: { source_ms: sourceMs, summaries },
+    snapshots: {},
+    session: sessionBinding(session),
     iat: now,
-    exp: Math.min(run.exp, sourceMs + EVIDENCE_TTL_MS),
+    exp: sourceMs + EVIDENCE_TTL_MS,
   };
   return { token: encodeToken(payload), payload };
 }
 
-export function verifyScanEvidenceToken(
+export function verifyWorkflowEvidenceToken(
   token,
-  { run, now = Date.now() } = {},
+  { mode, stage = null, session = null, now = Date.now() } = {},
 ) {
-  const payload = decodeToken(token, "scan", now);
-  if (payload.run_id !== run.run_id || payload.mode !== run.mode) {
-    fail("scanner evidence belongs to another run");
+  const payload = decodeWorkflowToken(token, now);
+  assertSession(payload, session);
+  if (mode && payload.mode !== canonicalMode(mode)) fail("workflow mode mismatch");
+  const allowedStages = stage == null ? null : Array.isArray(stage) ? stage : [stage];
+  if (allowedStages && !allowedStages.includes(payload.stage)) {
+    fail(`workflow stage ${payload.stage} cannot be used here`);
   }
   return payload;
 }
 
-export function createSnapshotEvidenceToken({
-  run,
-  scan,
-  data,
-  symbol,
+export function createSnapshotBundleEvidence({
+  workflow,
+  dataBySymbol,
+  symbols,
   now = Date.now(),
 } = {}) {
-  if (!data || data.ok !== true || data.mode !== "swisser_gpt_snapshot") {
-    fail("snapshot response is unsuccessful or has the wrong mode");
+  if (!workflow || workflow.type !== "workflow" || workflow.stage !== "scan") {
+    fail("snapshot bundle requires one current scanner workflow");
   }
-  const normalized = uniqueSymbols([symbol])[0];
-  if (data.symbol !== normalized) fail("snapshot returned another symbol");
-  if (!scan.requested_symbols.includes(normalized)) {
-    fail("snapshot symbol was not part of the current scanner run");
+  if (workflow.mode === "overview") fail("overview must not use snapshots");
+
+  const selected = uniqueSymbols(symbols, { tradeOnly: true });
+  if (!selected.length) fail("snapshot bundle has no candidates");
+  for (const symbol of selected) {
+    if (!workflow.requested_symbols.includes(symbol)) {
+      fail(`snapshot symbol ${symbol} was not part of the scanner cut`);
+    }
   }
-  const sourceMs = assertFreshSource(data, run, now, `snapshot ${normalized}`);
-  if (sourceMs < scan.source_ms) {
-    fail(`snapshot ${normalized} is older than the current scanner`);
+  if (workflow.mode === "entry") {
+    assertSameSet(selected, workflow.expected_symbols, "entry snapshot bundle");
+  }
+
+  const supplied = dataBySymbol instanceof Map
+    ? dataBySymbol
+    : new Map(Object.entries(dataBySymbol || {}));
+  assertSameSet([...supplied.keys()], selected, "snapshot bundle response");
+
+  const snapshots = {};
+  for (const symbol of selected) {
+    const data = supplied.get(symbol);
+    if (!data || data.ok !== true || data.mode !== "swisser_gpt_snapshot") {
+      fail(`snapshot ${symbol} is unsuccessful or has the wrong mode`);
+    }
+    if (data.symbol !== symbol) fail(`snapshot ${symbol} returned another symbol`);
+    const sourceMs = sourceTimeMs(data, `snapshot ${symbol}`);
+    if (sourceMs < workflow.scan.source_ms) {
+      fail(`snapshot ${symbol} is older than the current scanner`);
+    }
+    if (sourceMs > now + FUTURE_CLOCK_TOLERANCE_MS) {
+      fail(`snapshot ${symbol} is from the future`);
+    }
+    snapshots[symbol] = {
+      source_ms: sourceMs,
+      summary: summarizeMarketItem(data),
+    };
   }
 
   const payload = {
-    v: TOKEN_VERSION,
-    type: "snapshot",
-    run_id: run.run_id,
-    mode: run.mode,
-    symbol: normalized,
-    source_ms: sourceMs,
-    summary: summarizeMarketItem(data),
+    ...workflow,
+    stage: "bundle",
+    snapshots,
     iat: now,
-    exp: Math.min(run.exp, scan.exp),
   };
   return { token: encodeToken(payload), payload };
-}
-
-export function verifySnapshotEvidenceToken(
-  token,
-  { run, scan, now = Date.now() } = {},
-) {
-  const payload = decodeToken(token, "snapshot", now);
-  if (payload.run_id !== run.run_id || payload.mode !== run.mode) {
-    fail("snapshot evidence belongs to another run");
-  }
-  if (!scan.requested_symbols.includes(payload.symbol)) {
-    fail("snapshot symbol was not part of the current scanner run");
-  }
-  if (payload.source_ms < scan.source_ms) {
-    fail(`snapshot ${payload.symbol} is older than the current scanner`);
-  }
-  return payload;
 }
 
 function shortSymbol(symbol) {
@@ -410,10 +413,11 @@ function moscowTime(timestampMs) {
   }).format(new Date(timestampMs));
 }
 
-function cutTime(scan, snapshots) {
-  const times = [scan.source_ms, ...snapshots.map((item) => item.source_ms)].sort(
-    (a, b) => a - b,
-  );
+function cutTime(workflow) {
+  const times = [
+    workflow.scan.source_ms,
+    ...Object.values(workflow.snapshots || {}).map((item) => item.source_ms),
+  ].sort((a, b) => a - b);
   const first = moscowTime(times[0]);
   const last = moscowTime(times[times.length - 1]);
   return `${first === last ? first : `${first}–${last}`} МСК`;
@@ -424,9 +428,7 @@ function directionFamily(value) {
 }
 
 export function buildVerifiedCard({
-  runToken,
-  scanEvidenceToken,
-  snapshotEvidenceTokens = [],
+  evidenceToken,
   mode,
   lead,
   marketRows,
@@ -436,51 +438,41 @@ export function buildVerifiedCard({
   now = Date.now(),
 } = {}) {
   const canonical = canonicalMode(mode);
-  const run = verifyRunToken(runToken, { mode: canonical, session, now });
-  const scan = verifyScanEvidenceToken(scanEvidenceToken, { run, now });
-  const snapshots = snapshotEvidenceTokens.map((token, index) => {
-    try {
-      return verifySnapshotEvidenceToken(token, { run, scan, now });
-    } catch (error) {
-      if (/invalid snapshot token signature/.test(String(error?.message || ""))) {
-        fail(`snapshot token #${index + 1} has invalid signature; refresh this snapshot`);
-      }
-      throw error;
-    }
+  const workflow = verifyWorkflowEvidenceToken(evidenceToken, {
+    mode: canonical,
+    session,
+    now,
   });
-  const snapshotsBySymbol = new Map();
-  for (const snapshot of snapshots) {
-    if (snapshotsBySymbol.has(snapshot.symbol)) fail(`duplicate snapshot ${snapshot.symbol}`);
-    snapshotsBySymbol.set(snapshot.symbol, snapshot);
-  }
+  const snapshots = workflow.snapshots || {};
+  const snapshotSymbols = Object.keys(snapshots);
 
   const inputRows = Array.isArray(marketRows) ? marketRows : [];
   const rowSymbols = inputRows.map((row) => fullSymbol(row.symbol));
   if (new Set(rowSymbols).size !== rowSymbols.length) fail("duplicate market row");
 
-  const scannedTradeSymbols = scan.requested_symbols.filter((symbol) => symbol !== BTC_SYMBOL);
+  const scannedTradeSymbols = workflow.requested_symbols.filter(
+    (symbol) => symbol !== BTC_SYMBOL,
+  );
   if (canonical === "overview" || canonical === "setups") {
     assertSameSet(scannedTradeSymbols, TRADE_SYMBOLS, `${canonical} scanner`);
     assertSameSet(rowSymbols, TRADE_SYMBOLS, `${canonical} card`);
   } else {
-    if (!scannedTradeSymbols.length) fail("entry run has no saved candidates");
-    if (run.expected_symbols.length) {
-      assertSameSet(scannedTradeSymbols, run.expected_symbols, "entry scanner");
-    }
-    assertSameSet(rowSymbols, scannedTradeSymbols, "entry card");
-    for (const symbol of rowSymbols) {
-      if (!snapshotsBySymbol.has(symbol)) fail(`entry row ${symbol} has no fresh snapshot`);
-    }
+    assertSameSet(scannedTradeSymbols, workflow.expected_symbols, "entry scanner");
+    assertSameSet(rowSymbols, workflow.expected_symbols, "entry card");
+    if (workflow.stage !== "bundle") fail("entry requires one fresh snapshot bundle");
+    assertSameSet(snapshotSymbols, workflow.expected_symbols, "entry snapshot bundle");
   }
 
   if (canonical === "overview") {
-    if (snapshots.length) fail("overview must not use snapshots");
+    if (workflow.stage !== "scan" || snapshotSymbols.length) {
+      fail("overview must use scanner evidence only");
+    }
     if (candidates.length) fail("overview must not contain candidates");
   }
   if (canonical === "setups") {
     for (const row of inputRows) {
       const symbol = fullSymbol(row.symbol);
-      if (["top", "secondary"].includes(row.priority) && !snapshotsBySymbol.has(symbol)) {
+      if (["top", "secondary"].includes(row.priority) && !snapshots[symbol]) {
         fail(`ranked setup ${symbol} has no fresh snapshot`);
       }
     }
@@ -489,11 +481,10 @@ export function buildVerifiedCard({
   const inputRowsBySymbol = new Map(
     inputRows.map((row) => [fullSymbol(row.symbol), row]),
   );
-  const orderedSymbols =
-    canonical === "overview" ? TRADE_SYMBOLS : rowSymbols;
+  const orderedSymbols = canonical === "overview" ? TRADE_SYMBOLS : rowSymbols;
   const verifiedRows = orderedSymbols.map((symbol) => {
     const input = inputRowsBySymbol.get(symbol);
-    const summary = snapshotsBySymbol.get(symbol)?.summary || scan.summaries[symbol];
+    const summary = snapshots[symbol]?.summary || workflow.scan.summaries[symbol];
     if (!summary) fail(`no current evidence for ${symbol}`);
     return {
       symbol: shortSymbol(symbol),
@@ -514,22 +505,22 @@ export function buildVerifiedCard({
     if (candidateSymbols.has(symbol)) fail(`duplicate candidate ${symbol}`);
     candidateSymbols.add(symbol);
     if (!rowSymbols.includes(symbol)) fail(`candidate ${symbol} is outside the current card`);
-    if (!snapshotsBySymbol.has(symbol)) fail(`candidate ${symbol} has no fresh snapshot`);
+    if (!snapshots[symbol]) fail(`candidate ${symbol} has no fresh snapshot`);
     if (candidate.targets.length !== candidate.pnl_6x.length) {
       fail(`candidate ${symbol} has unmatched targets and PnL values`);
     }
-    const allowed = snapshotsBySymbol.get(symbol).summary.allowed_directions || [];
+    const allowed = snapshots[symbol].summary.allowed_directions || [];
     const family = directionFamily(candidate.direction);
     if (allowed.length && !allowed.includes(family)) {
       fail(`candidate ${symbol} direction conflicts with current evidence`);
     }
   }
 
-  const btc = scan.summaries[BTC_SYMBOL];
+  const btc = workflow.scan.summaries[BTC_SYMBOL];
   if (!btc) fail("current scanner has no BTC context");
   return {
     mode: canonical,
-    cut_time: cutTime(scan, snapshots),
+    cut_time: cutTime(workflow),
     btc_price: formatPrice(btc.price),
     btc_structure: { h4: btc.h4, h1: btc.h1, m15: btc.m15, m1: btc.m1 },
     lead,
@@ -538,10 +529,14 @@ export function buildVerifiedCard({
     conclusion,
     source_integrity: {
       verified: true,
-      run_id: run.run_id,
-      scan_fetched_at_unix: Math.round(scan.source_ms / 1000),
+      protocol: "atomic-v2",
+      run_id: workflow.run_id,
+      scan_fetched_at_unix: Math.round(workflow.scan.source_ms / 1000),
       snapshot_fetched_at_unix: Object.fromEntries(
-        snapshots.map((item) => [item.symbol, Math.round(item.source_ms / 1000)]),
+        Object.entries(snapshots).map(([symbol, item]) => [
+          symbol,
+          Math.round(item.source_ms / 1000),
+        ]),
       ),
     },
   };
