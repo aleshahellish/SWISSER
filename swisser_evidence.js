@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 export const TRADE_SYMBOLS = [
   "TAO_USDT",
@@ -17,6 +18,9 @@ export const RUN_TTL_MS = 600_000;
 export const EVIDENCE_TTL_MS = 180_000;
 
 const TOKEN_VERSION = 1;
+const TOKEN_FORMAT = "z1";
+const MAX_ENCODED_TOKEN_PAYLOAD_LENGTH = 8_192;
+const MAX_DECODED_TOKEN_PAYLOAD_LENGTH = 32_768;
 const SOURCE_START_TOLERANCE_MS = 15_000;
 const FUTURE_CLOCK_TOLERANCE_MS = 15_000;
 const TOKEN_SECRET =
@@ -53,15 +57,18 @@ function uniqueSymbols(values, { tradeOnly = false } = {}) {
   return result;
 }
 
-function signature(encodedPayload) {
+function signature(signedPayload) {
   return createHmac("sha256", TOKEN_SECRET)
-    .update(encodedPayload)
+    .update(signedPayload)
     .digest("base64url");
 }
 
 function encodeToken(payload) {
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${encodedPayload}.${signature(encodedPayload)}`;
+  const encodedPayload = deflateRawSync(Buffer.from(JSON.stringify(payload)), {
+    level: 9,
+  }).toString("base64url");
+  const signedPayload = `${TOKEN_FORMAT}.${encodedPayload}`;
+  return `${signedPayload}.${signature(signedPayload)}`;
 }
 
 function constantTimeEqual(left, right) {
@@ -71,17 +78,50 @@ function constantTimeEqual(left, right) {
 }
 
 function decodeToken(token, expectedType, now = Date.now()) {
-  const [encodedPayload, suppliedSignature, extra] = String(token || "").split(".");
-  if (!encodedPayload || !suppliedSignature || extra) fail("malformed evidence token");
-  if (!constantTimeEqual(signature(encodedPayload), suppliedSignature)) {
-    fail("invalid evidence token signature");
+  const parts = String(token || "").split(".");
+  let encodedPayload;
+  let suppliedSignature;
+  let signedPayload;
+  let compressed = false;
+
+  if (parts.length === 3 && parts[0] === TOKEN_FORMAT) {
+    [, encodedPayload, suppliedSignature] = parts;
+    signedPayload = `${TOKEN_FORMAT}.${encodedPayload}`;
+    compressed = true;
+  } else if (parts.length === 2) {
+    // Accept tokens issued before compact format z1 so an in-flight run is not
+    // broken during a deployment.
+    [encodedPayload, suppliedSignature] = parts;
+    signedPayload = encodedPayload;
+  } else {
+    fail(`malformed ${expectedType} token`);
+  }
+
+  if (
+    !encodedPayload ||
+    !suppliedSignature ||
+    encodedPayload.length > MAX_ENCODED_TOKEN_PAYLOAD_LENGTH
+  ) {
+    fail(`malformed ${expectedType} token`);
+  }
+  if (!constantTimeEqual(signature(signedPayload), suppliedSignature)) {
+    fail(`invalid ${expectedType} token signature`);
   }
 
   let payload;
   try {
-    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+    const bytes = Buffer.from(encodedPayload, "base64url");
+    const json = compressed
+      ? inflateRawSync(bytes, { maxOutputLength: MAX_DECODED_TOKEN_PAYLOAD_LENGTH }).toString(
+          "utf8",
+        )
+      : bytes.toString("utf8");
+    if (json.length > MAX_DECODED_TOKEN_PAYLOAD_LENGTH) {
+      fail(`invalid ${expectedType} token payload`);
+    }
+    payload = JSON.parse(json);
   } catch {
-    fail("invalid evidence token payload");
+    fail(`invalid ${expectedType} token payload`);
   }
 
   if (payload.v !== TOKEN_VERSION || payload.type !== expectedType) {
@@ -398,9 +438,16 @@ export function buildVerifiedCard({
   const canonical = canonicalMode(mode);
   const run = verifyRunToken(runToken, { mode: canonical, session, now });
   const scan = verifyScanEvidenceToken(scanEvidenceToken, { run, now });
-  const snapshots = snapshotEvidenceTokens.map((token) =>
-    verifySnapshotEvidenceToken(token, { run, scan, now }),
-  );
+  const snapshots = snapshotEvidenceTokens.map((token, index) => {
+    try {
+      return verifySnapshotEvidenceToken(token, { run, scan, now });
+    } catch (error) {
+      if (/invalid snapshot token signature/.test(String(error?.message || ""))) {
+        fail(`snapshot token #${index + 1} has invalid signature; refresh this snapshot`);
+      }
+      throw error;
+    }
+  });
   const snapshotsBySymbol = new Map();
   for (const snapshot of snapshots) {
     if (snapshotsBySymbol.has(snapshot.symbol)) fail(`duplicate snapshot ${snapshot.symbol}`);

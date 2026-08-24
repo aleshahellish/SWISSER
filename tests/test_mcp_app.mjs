@@ -91,8 +91,9 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.7.1");
+  assert.equal(initialized.result.serverInfo.version, "1.7.2");
   assert.match(initialized.result.instructions, /каждый рыночный запуск SWISSER начинай с start_swisser_run/);
+  assert.match(initialized.result.instructions, /opaque-токены дословно из structuredContent/);
   assert.match(initialized.result.instructions, /Не смешивай токены разных запусков/);
   assert.match(initialized.result.instructions, /без проверенного свежего evidence renderer обязан отказать/);
   assert.match(initialized.result.instructions, /«3» — entry/);
