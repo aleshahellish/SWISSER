@@ -5,9 +5,23 @@ import mtf_decision
 from mtf_decision import build_mtf_decision
 
 
-def signal(direction, trigger=None):
+def structure_event(event_type, direction, bars_since, bar_index):
+    return {
+        "event_type": event_type,
+        "direction": direction,
+        "bars_since": bars_since,
+        "bar_index": bar_index,
+    }
+
+
+def signal(direction, trigger=None, structure_events=None):
+    structure_events = structure_events or []
     return {
         "primary_direction": direction,
+        "latest_internal_event": (
+            structure_events[-1] if structure_events else None
+        ),
+        "recent_internal_events": structure_events,
         "latest_trigger": trigger
         or {
             "type": "NONE",
@@ -17,12 +31,20 @@ def signal(direction, trigger=None):
     }
 
 
-def signals(h4, h1, m15, m1, trigger=None):
+def signals(
+    h4,
+    h1,
+    m15,
+    m1,
+    trigger=None,
+    m15_events=None,
+    m1_events=None,
+):
     return {
         "4h": signal(h4),
         "1h": signal(h1),
-        "15m": signal(m15),
-        "1m": signal(m1, trigger),
+        "15m": signal(m15, structure_events=m15_events),
+        "1m": signal(m1, trigger, m1_events),
     }
 
 
@@ -86,18 +108,14 @@ class MtfDecisionTests(unittest.TestCase):
         )
 
     def test_aligned_15m_and_1m_can_form_confirmed_local_short(self):
-        bearish_c3 = {
-            "type": "C3_CONFIRMED",
-            "direction": "BEARISH",
-            "is_fresh": True,
-        }
+        bearish_choch = structure_event("CHOCH", "BEARISH", 0, 100)
         decision = build_mtf_decision(
             signals(
                 "BULLISH",
                 "BULLISH",
                 "BEARISH",
                 "BEARISH",
-                bearish_c3,
+                m1_events=[bearish_choch],
             ),
             BROAD_BULLISH,
         )
@@ -142,18 +160,14 @@ class MtfDecisionTests(unittest.TestCase):
         )
 
     def test_four_hour_opposition_warns_but_does_not_block_core_short(self):
-        bearish_c3 = {
-            "type": "C3_CONFIRMED",
-            "direction": "BEARISH",
-            "is_fresh": True,
-        }
+        bearish_choch = structure_event("CHOCH", "BEARISH", 0, 100)
         decision = build_mtf_decision(
             signals(
                 "BULLISH",
                 "BEARISH",
                 "BEARISH",
                 "BEARISH",
-                bearish_c3,
+                m1_events=[bearish_choch],
             ),
             {"direction": "BEARISH"},
         )
@@ -168,6 +182,169 @@ class MtfDecisionTests(unittest.TestCase):
             "COUNTER_CONTEXT",
         )
         self.assertFalse(context["blocks_scenario"])
+
+    def test_fresh_1m_choch_is_ready_without_c2_c3(self):
+        bullish_choch = structure_event("CHOCH", "BULLISH", 1, 100)
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                m1_events=[bullish_choch],
+            ),
+            BROAD_BULLISH,
+        )
+
+        execution = decision["execution_state"]
+        self.assertTrue(execution["trade_ready"])
+        self.assertEqual(
+            execution["state"],
+            "FRESH_ENTRY_STRUCTURE_CONFIRMATION",
+        )
+        self.assertEqual(
+            execution["entry_structure_confirmation"]["confirmation_type"],
+            "CHOCH",
+        )
+        self.assertEqual(
+            execution["c2_c3_role"],
+            "OPTIONAL_CONFLUENCE_NOT_READINESS_GATE",
+        )
+
+    def test_fresh_c2_c3_without_1m_choch_is_not_ready(self):
+        bullish_c3 = {
+            "type": "C3_CONFIRMED",
+            "direction": "BULLISH",
+            "is_fresh": True,
+        }
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                trigger=bullish_c3,
+            ),
+            BROAD_BULLISH,
+        )
+
+        self.assertFalse(decision["execution_state"]["trade_ready"])
+        self.assertEqual(
+            decision["execution_state"]["entry_structure_confirmation"][
+                "reason"
+            ],
+            "NO_1M_INTERNAL_STRUCTURE_EVENT",
+        )
+
+    def test_stale_1m_choch_is_not_relabelled_as_ready(self):
+        stale_choch = structure_event("CHOCH", "BULLISH", 4, 96)
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                m1_events=[stale_choch],
+            ),
+            BROAD_BULLISH,
+        )
+
+        self.assertFalse(decision["execution_state"]["trade_ready"])
+        self.assertEqual(
+            decision["execution_state"]["entry_structure_confirmation"][
+                "reason"
+            ],
+            "LATEST_1M_STRUCTURE_EVENT_IS_STALE",
+        )
+
+    def test_fresh_bos_keeps_the_preceding_choch_chain(self):
+        events = [
+            structure_event("CHOCH", "BULLISH", 2, 100),
+            structure_event("BOS", "BULLISH", 0, 102),
+        ]
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                m1_events=events,
+            ),
+            BROAD_BULLISH,
+        )
+
+        confirmation = decision["execution_state"][
+            "entry_structure_confirmation"
+        ]
+        self.assertTrue(decision["execution_state"]["trade_ready"])
+        self.assertEqual(confirmation["confirmation_type"], "CHOCH_THEN_BOS")
+        self.assertEqual(confirmation["origin_choch"]["event_type"], "CHOCH")
+
+    def test_bos_keeps_choch_origin_beyond_compact_event_history(self):
+        origin = structure_event("CHOCH", "BULLISH", 12, 88)
+        latest_bos = structure_event("BOS", "BULLISH", 0, 100)
+        latest_bos["active_leg_origin_choch"] = origin
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                m1_events=[latest_bos],
+            ),
+            BROAD_BULLISH,
+        )
+
+        confirmation = decision["execution_state"][
+            "entry_structure_confirmation"
+        ]
+        self.assertTrue(decision["execution_state"]["trade_ready"])
+        self.assertEqual(confirmation["confirmation_type"], "CHOCH_THEN_BOS")
+        self.assertEqual(confirmation["origin_choch"]["bar_index"], 88)
+
+    def test_fresh_bos_without_choch_origin_is_not_ready(self):
+        bullish_bos = structure_event("BOS", "BULLISH", 0, 100)
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                m1_events=[bullish_bos],
+            ),
+            BROAD_BULLISH,
+        )
+
+        self.assertFalse(decision["execution_state"]["trade_ready"])
+        self.assertEqual(
+            decision["execution_state"]["entry_structure_confirmation"][
+                "reason"
+            ],
+            "NO_CHOCH_IN_ACTIVE_1M_STRUCTURE_LEG",
+        )
+
+    def test_15m_bos_is_valid_setup_structure(self):
+        decision = build_mtf_decision(
+            signals(
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                "BULLISH",
+                m15_events=[
+                    structure_event("BOS", "BULLISH", 0, 100)
+                ],
+                m1_events=[
+                    structure_event("CHOCH", "BULLISH", 0, 100)
+                ],
+            ),
+            BROAD_BULLISH,
+        )
+
+        self.assertEqual(
+            decision["alignment_state"],
+            "CORE_FULL_BULLISH_ALIGNMENT",
+        )
+        self.assertTrue(decision["execution_state"]["trade_ready"])
 
     def test_15m_and_1m_disagreement_stays_wait(self):
         decision = build_mtf_decision(

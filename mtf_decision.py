@@ -10,6 +10,7 @@ from __future__ import annotations
 DIRECTIONAL_BIASES = {"BULLISH", "BEARISH"}
 TRADE_TO_BIAS = {"LONG": "BULLISH", "SHORT": "BEARISH"}
 BIAS_TO_TRADE = {value: key for key, value in TRADE_TO_BIAS.items()}
+ENTRY_STRUCTURE_FRESHNESS_BARS = 3
 
 
 def _direction(signals: dict[str, dict], timeframe: str) -> str:
@@ -83,19 +84,114 @@ def _continuation_bias(
     }
 
 
-def _has_fresh_confirmed_trigger(
+def _entry_structure_confirmation(
+    entry_signal: dict,
+    expected_direction: str,
+) -> dict:
+    """Validate a fresh LuxAlgo 1m CHoCH-led structure chain.
+
+    Candle 2/Candle 3 remains available as phase context, but it is not an
+    execution gate.  A fresh CHoCH is sufficient; a subsequent same-direction
+    BOS remains valid only when the active structure leg contains that CHoCH.
+    """
+
+    events = [
+        event
+        for event in (entry_signal.get("recent_internal_events") or [])
+        if isinstance(event, dict)
+    ]
+    latest = entry_signal.get("latest_internal_event") or {}
+    if latest and (
+        not events
+        or (
+            events[-1].get("bar_index"),
+            events[-1].get("event_type"),
+            events[-1].get("direction"),
+        )
+        != (
+            latest.get("bar_index"),
+            latest.get("event_type"),
+            latest.get("direction"),
+        )
+    ):
+        events.append(latest)
+
+    latest = events[-1] if events else latest
+    latest_direction = latest.get("direction", "UNDETERMINED")
+    latest_type = latest.get("event_type")
+    latest_bars_since = latest.get("bars_since")
+    latest_is_fresh = bool(
+        isinstance(latest_bars_since, int)
+        and 0 <= latest_bars_since <= ENTRY_STRUCTURE_FRESHNESS_BARS
+    )
+
+    active_leg = []
+    for event in reversed(events):
+        if event.get("direction") != expected_direction:
+            break
+        active_leg.append(event)
+
+    origin_choch = next(
+        (
+            event
+            for event in active_leg
+            if event.get("event_type") == "CHOCH"
+        ),
+        None,
+    )
+    if origin_choch is None:
+        embedded_origin = latest.get("active_leg_origin_choch")
+        if (
+            isinstance(embedded_origin, dict)
+            and embedded_origin.get("direction") == expected_direction
+            and embedded_origin.get("event_type") == "CHOCH"
+        ):
+            origin_choch = embedded_origin
+    confirmed = bool(
+        latest_direction == expected_direction
+        and latest_type in {"CHOCH", "BOS"}
+        and latest_is_fresh
+        and origin_choch is not None
+    )
+
+    if not latest:
+        reason = "NO_1M_INTERNAL_STRUCTURE_EVENT"
+    elif latest_direction != expected_direction:
+        reason = "LATEST_1M_STRUCTURE_EVENT_OPPOSED"
+    elif latest_type not in {"CHOCH", "BOS"}:
+        reason = "LATEST_1M_EVENT_IS_NOT_CHOCH_OR_BOS"
+    elif not latest_is_fresh:
+        reason = "LATEST_1M_STRUCTURE_EVENT_IS_STALE"
+    elif origin_choch is None:
+        reason = "NO_CHOCH_IN_ACTIVE_1M_STRUCTURE_LEG"
+    else:
+        reason = "FRESH_CHOCH_LED_1M_STRUCTURE_CONFIRMATION"
+
+    return {
+        "confirmed": confirmed,
+        "expected_direction": expected_direction,
+        "freshness_rule_bars": ENTRY_STRUCTURE_FRESHNESS_BARS,
+        "latest_event": latest or None,
+        "origin_choch": origin_choch,
+        "confirmation_type": (
+            "CHOCH"
+            if confirmed and latest_type == "CHOCH"
+            else "CHOCH_THEN_BOS"
+            if confirmed
+            else "NONE"
+        ),
+        "reason": reason,
+    }
+
+
+def _has_fresh_structure_confirmation(
     signals: dict[str, dict],
     expected_direction: str,
 ) -> bool:
-    trigger = (signals.get("1m") or {}).get("latest_trigger") or {}
-    return bool(
-        trigger.get("is_fresh")
-        and trigger.get("direction") == expected_direction
-        and trigger.get("type") in {
-            "C3_CONFIRMED",
-            "C2_CONFIRMED_BY_C3",
-        }
-    )
+    return _entry_structure_confirmation(
+        signals.get("1m") or {},
+        expected_direction,
+    )["confirmed"]
 
 
 def _active_scenario(
@@ -127,7 +223,7 @@ def _active_scenario(
             "reason": "1h, 15m and 1m are bearish.",
         }
     if alignment_state == "LOCAL_BULLISH_COUNTER_1H":
-        if not _has_fresh_confirmed_trigger(signals, "BULLISH"):
+        if not _has_fresh_structure_confirmation(signals, "BULLISH"):
             return {
                 "direction": "WAIT",
                 "label": "WAIT",
@@ -140,7 +236,7 @@ def _active_scenario(
                 "requires_entry_confirmation": True,
                 "reason": (
                     "15m and 1m are bullish against bearish 1h, but there is "
-                    "no fresh confirmed bullish 1m trigger yet."
+                    "no fresh bullish 1m CHoCH-led structure confirmation yet."
                 ),
             }
         return {
@@ -158,7 +254,7 @@ def _active_scenario(
             ),
         }
     if alignment_state == "LOCAL_BEARISH_COUNTER_1H":
-        if not _has_fresh_confirmed_trigger(signals, "BEARISH"):
+        if not _has_fresh_structure_confirmation(signals, "BEARISH"):
             return {
                 "direction": "WAIT",
                 "label": "WAIT",
@@ -171,7 +267,7 @@ def _active_scenario(
                 "requires_entry_confirmation": True,
                 "reason": (
                     "15m and 1m are bearish against bullish 1h, but there is "
-                    "no fresh confirmed bearish 1m trigger yet."
+                    "no fresh bearish 1m CHoCH-led structure confirmation yet."
                 ),
             }
         return {
@@ -250,6 +346,10 @@ def _execution_state(scenario: dict, entry_signal: dict) -> dict:
     preferred_direction = TRADE_TO_BIAS.get(scenario.get("direction"))
     entry_direction = entry_signal.get("primary_direction", "UNDETERMINED")
     trigger = entry_signal.get("latest_trigger") or {}
+    structure_confirmation = _entry_structure_confirmation(
+        entry_signal,
+        preferred_direction or "NONE",
+    )
 
     if preferred_direction is None:
         relation = "NOT_APPLICABLE"
@@ -265,22 +365,11 @@ def _execution_state(scenario: dict, entry_signal: dict) -> dict:
         trade_ready = False
     elif entry_direction == preferred_direction:
         relation = "ALIGNED"
-        if (
-            trigger.get("is_fresh")
-            and trigger.get("direction") == preferred_direction
-            and trigger.get("type") in {"C3_CONFIRMED", "C2_CONFIRMED_BY_C3"}
-        ):
-            state = "FRESH_ENTRY_CONFIRMATION"
+        if structure_confirmation["confirmed"]:
+            state = "FRESH_ENTRY_STRUCTURE_CONFIRMATION"
             trade_ready = True
-        elif (
-            trigger.get("is_fresh")
-            and trigger.get("direction") == preferred_direction
-            and trigger.get("type") == "C2_UNCONFIRMED"
-        ):
-            state = "WAITING_FOR_C3_CONFIRMATION"
-            trade_ready = False
         else:
-            state = "ENTRY_BIAS_ALIGNED_NO_FRESH_TRIGGER"
+            state = "ENTRY_BIAS_ALIGNED_NO_FRESH_CHOCH_CONFIRMATION"
             trade_ready = False
     elif entry_direction in DIRECTIONAL_BIASES:
         relation = "OPPOSED"
@@ -297,7 +386,9 @@ def _execution_state(scenario: dict, entry_signal: dict) -> dict:
         "preferred_direction": preferred_direction or "NONE",
         "entry_timeframe_direction": entry_direction,
         "relation_to_preference": relation,
+        "entry_structure_confirmation": structure_confirmation,
         "latest_entry_trigger": trigger,
+        "c2_c3_role": "OPTIONAL_CONFLUENCE_NOT_READINESS_GATE",
     }
 
 

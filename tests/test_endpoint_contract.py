@@ -173,6 +173,12 @@ class EndpointContractTests(unittest.TestCase):
         self.assertIn("continuation_bias", hierarchy)
         self.assertIn("active_trade_scenario", hierarchy)
         self.assertIn("strategic_4h_context", hierarchy)
+        execution = hierarchy["execution_state"]
+        self.assertIn("entry_structure_confirmation", execution)
+        self.assertEqual(
+            execution["c2_c3_role"],
+            "OPTIONAL_CONFLUENCE_NOT_READINESS_GATE",
+        )
         for block in by_symbol["HYPE_USDT"]["timeframe_summary"].values():
             self.assertIn("luxalgo_structure", block)
             self.assertNotIn("protected_structure", block)
@@ -240,6 +246,12 @@ class EndpointContractTests(unittest.TestCase):
         self.assertIn(
             "active_trade_scenario",
             compact["mtf_hierarchy"],
+        )
+        execution = compact["mtf_hierarchy"]["execution_state"]
+        self.assertIn("entry_structure_confirmation", execution)
+        self.assertEqual(
+            execution["c2_c3_role"],
+            "OPTIONAL_CONFLUENCE_NOT_READINESS_GATE",
         )
         for block in compact["timeframes"].values():
             self.assertIn("closure_sequence", block)

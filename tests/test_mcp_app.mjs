@@ -91,7 +91,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.7.2");
+  assert.equal(initialized.result.serverInfo.version, "1.7.3");
   assert.match(initialized.result.instructions, /каждый рыночный запуск SWISSER начинай с start_swisser_run/);
   assert.match(initialized.result.instructions, /opaque-токены дословно из structuredContent/);
   assert.match(initialized.result.instructions, /Не смешивай токены разных запусков/);
@@ -113,7 +113,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assert.equal(tools.result.tools[0]._meta["openai/widgetAccessible"], true);
   assert.equal(
     tools.result.tools[4]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.7.1.html",
+    "ui://swisser/market-controls/1.7.3.html",
   );
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
@@ -141,7 +141,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.7.1.html",
+    uri: "ui://swisser/market-controls/1.7.3.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -162,8 +162,11 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assert.match(COMMANDS[0], /не ранжируй их/);
   assert.match(COMMANDS[1], /Не задавай количество заранее/);
   assert.match(COMMANDS[2], /только по кандидатам из последнего результата «Лучшие сетапы»/);
+  assert.match(COMMANDS[2], /свежий значимый LuxAlgo internal CHoCH/);
+  assert.match(COMMANDS[2], /отсутствие не является veto/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.7.3.html",
     "ui://swisser/market-controls/1.7.1.html",
     "ui://swisser/market-controls/1.7.0.html",
     "ui://swisser/market-controls/1.6.0.html",

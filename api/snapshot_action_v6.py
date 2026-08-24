@@ -332,6 +332,7 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
             "structure_relation": "PARTIAL_REFERENCE_DATA",
             "latest_swing_event": None,
             "latest_internal_event": None,
+            "recent_internal_events": [],
             "latest_trigger": _latest_trigger({}),
             "closure_sequence": {},
             "opposite_closure_to_primary_direction": {
@@ -386,6 +387,7 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
         "structure_relation": bias["structure_relation"],
         "latest_swing_event": bias["latest_swing_event"],
         "latest_internal_event": bias["latest_internal_event"],
+        "recent_internal_events": bias["recent_internal_events"],
         "latest_trigger": _latest_trigger(timeframe_data),
         "closure_sequence": sequence,
         "opposite_closure_to_primary_direction": opposite_warning,
@@ -717,6 +719,7 @@ def _action_lux_event(event):
         "direction": event.get("direction"),
         "time": event.get("time"),
         "time_utc": event.get("time_utc"),
+        "bars_since": event.get("bars_since"),
         "close": event.get("close"),
         "broken_level": pivot.get("level"),
         "broken_pivot_time": pivot.get("time"),
@@ -825,6 +828,10 @@ def _action_timeframe_signal(signal):
         "latest_internal_event": _action_lux_event(
             signal.get("latest_internal_event")
         ),
+        "recent_internal_events": [
+            _action_lux_event(event)
+            for event in (signal.get("recent_internal_events") or [])[-6:]
+        ],
         "latest_trigger": _action_trigger(signal.get("latest_trigger")),
         "closure_sequence": _action_closure_sequence(
             signal.get("closure_sequence")
@@ -840,6 +847,8 @@ def _action_execution_state(state):
     if not isinstance(state, dict):
         return None
 
+    confirmation = state.get("entry_structure_confirmation") or {}
+
     return {
         "state": state.get("state"),
         "trade_ready": state.get("trade_ready"),
@@ -850,9 +859,29 @@ def _action_execution_state(state):
         "relation_to_preference": state.get(
             "relation_to_preference"
         ),
+        "entry_structure_confirmation": {
+            "confirmed": confirmation.get("confirmed"),
+            "expected_direction": confirmation.get(
+                "expected_direction"
+            ),
+            "freshness_rule_bars": confirmation.get(
+                "freshness_rule_bars"
+            ),
+            "confirmation_type": confirmation.get(
+                "confirmation_type"
+            ),
+            "reason": confirmation.get("reason"),
+            "latest_event": _action_lux_event(
+                confirmation.get("latest_event")
+            ),
+            "origin_choch": _action_lux_event(
+                confirmation.get("origin_choch")
+            ),
+        },
         "latest_entry_trigger": _action_trigger(
             state.get("latest_entry_trigger")
         ),
+        "c2_c3_role": state.get("c2_c3_role"),
     }
 
 
