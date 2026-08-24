@@ -25,7 +25,7 @@ import {
   verifyScanEvidenceToken,
 } from "../swisser_evidence.js";
 
-const SERVER_VERSION = "1.7.1";
+const SERVER_VERSION = "1.7.2";
 const CONTROLS_URI = "ui://swisser/market-controls/1.7.1.html";
 const LEGACY_CONTROLS_URIS = [
   "ui://swisser/market-controls/1.7.0.html",
@@ -258,7 +258,8 @@ export function createSwisserMcpServer() {
   }, {
     instructions:
       "ОБЯЗАТЕЛЬНО: каждый рыночный запуск SWISSER начинай с start_swisser_run и используй выданный run_token " +
-      "во всех последующих инструментах этого запуска. Не смешивай токены разных запусков. Каждый завершённый " +
+      "во всех последующих инструментах этого запуска. Передавай все opaque-токены дословно из structuredContent: " +
+      "не пересказывай, не сокращай и не реконструируй их. Не смешивай токены разных запусков. Каждый завершённый " +
       "рыночный анализ заканчивай вызовом render_swisser_market_card с scan_evidence_token и всеми нужными " +
       "snapshot_evidence_tokens; без проверенного свежего evidence renderer обязан отказать. Структура, цены и " +
       "время среза в карточке являются серверными полями: не передавай и не подменяй их вручную. " +
