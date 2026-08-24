@@ -10,7 +10,11 @@ export const TRADE_SYMBOLS = [
 ];
 export const BTC_SYMBOL = "BTC_USDT";
 export const SUPPORTED_SYMBOLS = [...TRADE_SYMBOLS, BTC_SYMBOL];
-export const RUN_TTL_MS = 180_000;
+// A run token is a workflow envelope, not market evidence. It must survive
+// ChatGPT queueing and reasoning before the first scanner call.
+export const RUN_TTL_MS = 600_000;
+// Market evidence stays short-lived from the moment the scanner actually ran.
+export const EVIDENCE_TTL_MS = 180_000;
 
 const TOKEN_VERSION = 1;
 const SOURCE_START_TOLERANCE_MS = 15_000;
@@ -268,7 +272,7 @@ export function createScanEvidenceToken({
     source_ms: sourceMs,
     summaries,
     iat: now,
-    exp: run.exp,
+    exp: Math.min(run.exp, sourceMs + EVIDENCE_TTL_MS),
   };
   return { token: encodeToken(payload), payload };
 }
@@ -313,7 +317,7 @@ export function createSnapshotEvidenceToken({
     source_ms: sourceMs,
     summary: summarizeMarketItem(data),
     iat: now,
-    exp: run.exp,
+    exp: Math.min(run.exp, scan.exp),
   };
   return { token: encodeToken(payload), payload };
 }
