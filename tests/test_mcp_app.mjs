@@ -91,7 +91,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.7.0");
+  assert.equal(initialized.result.serverInfo.version, "1.7.1");
   assert.match(initialized.result.instructions, /каждый рыночный запуск SWISSER начинай с start_swisser_run/);
   assert.match(initialized.result.instructions, /Не смешивай токены разных запусков/);
   assert.match(initialized.result.instructions, /без проверенного свежего evidence renderer обязан отказать/);
@@ -112,11 +112,11 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assert.equal(tools.result.tools[0]._meta["openai/widgetAccessible"], true);
   assert.equal(
     tools.result.tools[4]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.7.0.html",
+    "ui://swisser/market-controls/1.7.1.html",
   );
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v4.html",
+    "ui://swisser/market-card-v5.html",
   );
   const rendererProperties = tools.result.tools[3].inputSchema.properties;
   assert.equal(rendererProperties.cut_time, undefined);
@@ -140,7 +140,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.7.0.html",
+    uri: "ui://swisser/market-controls/1.7.1.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -151,8 +151,8 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     assert.match(command, /ОБЯЗАТЕЛЬНЫЙ финальный шаг/);
     assert.match(command, /Не создавай Markdown-таблицу или PNG вместо renderer/);
   }
-  assert.match(controlsHtml, /callTool\("start_swisser_run"/);
-  assert.match(controlsHtml, /SWISSER_RUN_TOKEN/);
+  assert.doesNotMatch(controlsHtml, /callTool\("start_swisser_run"/);
+  assert.doesNotMatch(controlsHtml, /SWISSER_RUN_TOKEN/);
   assert.match(controlsHtml, /data-mode="overview"/);
   assert.match(controlsHtml, /sendFollowUpMessage/);
   assert.match(controlsHtml, /requestDisplayMode\(\{ mode: "pip" \}\)/);
@@ -163,6 +163,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assert.match(COMMANDS[2], /только по кандидатам из последнего результата «Лучшие сетапы»/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.7.1.html",
     "ui://swisser/market-controls/1.7.0.html",
     "ui://swisser/market-controls/1.6.0.html",
     "ui://swisser/market-controls/1.5.1.html",
@@ -175,6 +176,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     "ui://swisser/market-controls-v1.html",
   ];
   const supportedCards = [
+    "ui://swisser/market-card-v5.html",
     "ui://swisser/market-card-v4.html",
     "ui://swisser/market-card-v3.html",
     "ui://swisser/market-card-v2.html",
@@ -254,12 +256,13 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   );
 
   const cardResource = await rpc(url, 8, "resources/read", {
-    uri: "ui://swisser/market-card-v4.html",
+    uri: "ui://swisser/market-card-v5.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Потенц\. PnL 6x/);
-  assert.match(cardHtml, /callTool\("start_swisser_run"/);
-  assert.match(cardHtml, /SWISSER_RUN_TOKEN/);
+  assert.doesNotMatch(cardHtml, /callTool\("start_swisser_run"/);
+  assert.doesNotMatch(cardHtml, /SWISSER_RUN_TOKEN/);
+  assert.match(cardHtml, /Сохранённые кандидаты этой карточки/);
   assert.match(cardHtml, /notifyIntrinsicHeight/);
   assert.match(cardHtml, /ResizeObserver/);
   assert.match(cardHtml, /Italianno/);
