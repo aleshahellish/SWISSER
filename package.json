@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test:mcp": "node --test tests/test_mcp_app.mjs"
+    "test:mcp": "node --test tests/*.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.0.1",
