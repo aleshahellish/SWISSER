@@ -25,9 +25,10 @@ import {
   verifyScanEvidenceToken,
 } from "../swisser_evidence.js";
 
-const SERVER_VERSION = "1.7.0";
-const CONTROLS_URI = "ui://swisser/market-controls/1.7.0.html";
+const SERVER_VERSION = "1.7.1";
+const CONTROLS_URI = "ui://swisser/market-controls/1.7.1.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.7.0.html",
   "ui://swisser/market-controls/1.6.0.html",
   "ui://swisser/market-controls/1.5.1.html",
   "ui://swisser/market-controls/1.5.0.html",
@@ -42,9 +43,9 @@ const SERVER_ICON = "https://tao-mexc-live.vercel.app/swisser-icon.svg";
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
 
 export const COMMANDS = [
-  "Собери нейтральный обзор рынка без выбора лучших. Если сообщение не содержит SWISSER_RUN_TOKEN, сначала вызови start_swisser_run с mode=overview. Передай run_token в полный scan_swisser_markets по всем поддерживаемым символам; BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме overview с теми же run_token и scan_evidence_token; structural fields и время renderer возьмёт из проверенного evidence. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Найди лучшие сетапы на всём рынке. Если сообщение не содержит SWISSER_RUN_TOKEN, сначала вызови start_swisser_run с mode=setups. Передай run_token в полный scan_swisser_markets, затем вместе с scan_evidence_token — в get_swisser_market_snapshot для каждого действительно конкурентного кандидата. Не задавай количество заранее и не назначай единственного победителя, если несколько монет равноценны. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме setups с токенами этого же запуска; без свежего snapshot_evidence_token кандидат не может попасть в карточку. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Если сообщение не содержит SWISSER_RUN_TOKEN, сначала вызови start_swisser_run с mode=entry и expected_symbols из сохранённого набора. Не добавляй остальные монеты и не формируй новый рейтинг. Передай run_token в scanner только по сохранённому набору, затем вместе с scan_evidence_token вызови свежий snapshot каждого. На 1m проверь CHoCH/BOS, displacement, окончание отката/ретест, C2/C3, опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — render_swisser_market_card в режиме entry с токенами текущего запуска. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Собери нейтральный обзор рынка без выбора лучших. Непосредственно перед scanner вызови start_swisser_run с mode=overview. Передай run_token в полный scan_swisser_markets по всем поддерживаемым символам; BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме overview с теми же run_token и scan_evidence_token; structural fields и время renderer возьмёт из проверенного evidence. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Найди лучшие сетапы на всём рынке. Непосредственно перед scanner вызови start_swisser_run с mode=setups. Передай run_token в полный scan_swisser_markets, затем вместе с scan_evidence_token — в get_swisser_market_snapshot для каждого действительно конкурентного кандидата. Не задавай количество заранее и не назначай единственного победителя, если несколько монет равноценны. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме setups с токенами этого же запуска; без свежего snapshot_evidence_token кандидат не может попасть в карточку. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Непосредственно перед scanner вызови start_swisser_run с mode=entry и expected_symbols из сохранённого набора. Не добавляй остальные монеты и не формируй новый рейтинг. Передай run_token в scanner только по сохранённому набору, затем вместе с scan_evidence_token вызови свежий snapshot каждого. На 1m проверь CHoCH/BOS, displacement, окончание отката/ретест, C2/C3, опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — render_swisser_market_card в режиме entry с токенами текущего запуска. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
 ];
 
 export const COMMAND_LABELS = [
@@ -147,39 +148,15 @@ const controlsHtml = `<!doctype html>
       return false;
     }
 
-    function structuredContent(result) {
-      return result?.structuredContent
-        || result?.result?.structuredContent
-        || result?.call_tool_result?.structuredContent
-        || null;
-    }
-
-    async function freshPrompt(prompt, mode) {
-      if (!window.openai?.callTool) return prompt;
-      // The floating panel has no access to the latest setup card. For entry,
-      // let the model recover that saved set first and then start a bound run.
-      if (mode === "entry") return prompt;
-      setStatus("Создаю свежий запуск…");
-      const result = await window.openai.callTool("start_swisser_run", {
-        mode,
-        expected_symbols: [],
-      });
-      const runToken = structuredContent(result)?.run_token;
-      if (!runToken) throw new Error("SWISSER не выдал токен свежего запуска");
-      return prompt + "\\n\\nSWISSER_RUN_TOKEN: " + runToken
-        + "\\nИспользуй именно этот токен во всех инструментах текущего запуска.";
-    }
-
-    async function send(prompt, mode) {
+    async function send(prompt) {
       buttons.forEach((item) => { item.disabled = true; });
       try {
         if (!window.openai?.sendFollowUpMessage) {
           throw new Error("Команды недоступны в этом режиме ChatGPT");
         }
-        const preparedPrompt = await freshPrompt(prompt, mode);
         setStatus("Отправляю…");
         await requestPip({ force: true });
-        await window.openai.sendFollowUpMessage({ prompt: preparedPrompt, scrollToBottom: true });
+        await window.openai.sendFollowUpMessage({ prompt, scrollToBottom: true });
         setStatus("Отправлено.", 1200);
       } catch (error) {
         setStatus(error?.message || "Не удалось отправить запрос.");
@@ -189,7 +166,7 @@ const controlsHtml = `<!doctype html>
     }
 
     buttons.forEach((button) => {
-      button.addEventListener("click", () => send(button.dataset.command, button.dataset.mode));
+      button.addEventListener("click", () => send(button.dataset.command));
     });
 
     pinButton.addEventListener("click", () => requestPip({ manual: true, force: true }));
@@ -316,8 +293,8 @@ export function createSwisserMcpServer() {
     {
       title: "Начать свежий запуск SWISSER",
       description:
-        "Создаёт короткоживущий токен одного свежего запуска. Вызывай первым для overview, setups или entry, " +
-        "если SWISSER_RUN_TOKEN не пришёл непосредственно от кнопки. Для entry передай ровно кандидатов из " +
+        "Создаёт токен одного запуска. Всегда вызывай непосредственно перед scanner для overview, setups или entry. " +
+        "Для entry передай ровно кандидатов из " +
         "последней карточки setups; для overview/setups expected_symbols должен быть пустым.",
       inputSchema: {
         mode: z.enum(["overview", "setups", "entry"]),
