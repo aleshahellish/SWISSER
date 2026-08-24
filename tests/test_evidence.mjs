@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
+import { inflateRawSync } from "node:zlib";
 
 import {
   BTC_SYMBOL,
@@ -10,6 +12,7 @@ import {
   createRunToken,
   createScanEvidenceToken,
   createSnapshotEvidenceToken,
+  verifyScanEvidenceToken,
   verifyRunToken,
 } from "../swisser_evidence.js";
 
@@ -84,6 +87,20 @@ function candidate(symbol = "SOL", overrides = {}) {
 
 function makeRun(mode, expectedSymbols = []) {
   return createRunToken({ mode, expectedSymbols, now: NOW });
+}
+
+function toLegacyToken(compactToken) {
+  const [format, compressedPayload] = compactToken.split(".");
+  assert.equal(format, "z1");
+  const json = inflateRawSync(Buffer.from(compressedPayload, "base64url"));
+  const encodedPayload = json.toString("base64url");
+  const secret =
+    process.env.SWISSER_EVIDENCE_SECRET ??
+    "swisser-evidence-integrity-v1-not-an-authentication-secret";
+  const signature = createHmac("sha256", secret)
+    .update(encodedPayload)
+    .digest("base64url");
+  return `${encodedPayload}.${signature}`;
 }
 
 function makeScan(run, symbols, sourceMs = NOW + 1_000, directions = {}) {
@@ -253,10 +270,7 @@ test("ChatGPT queue delay does not consume the market evidence window", () => {
 
 test("a session-bound run cannot be reused by another ChatGPT session", () => {
   const run = createRunToken({ mode: "overview", session: "session-a", now: NOW });
-  const payload = JSON.parse(
-    Buffer.from(run.token.split(".")[0], "base64url").toString("utf8"),
-  );
-  assert.notEqual(payload.session, "session-a");
+  assert.match(run.token, /^z1\./);
   assert.throws(
     () => verifyRunToken(run.token, { session: "session-b", now: NOW + 1_000 }),
     /another ChatGPT session/,
@@ -264,6 +278,53 @@ test("a session-bound run cannot be reused by another ChatGPT session", () => {
   assert.equal(
     verifyRunToken(run.token, { session: "session-a", now: NOW + 1_000 }).mode,
     "overview",
+  );
+});
+
+test("compact tokens are shorter, detect corruption by stage and accept legacy tokens", () => {
+  const run = makeRun("setups");
+  const scan = makeScan(run, [...TRADE_SYMBOLS, BTC_SYMBOL]);
+  const legacyRunToken = toLegacyToken(run.token);
+  const legacyScanToken = toLegacyToken(scan.token);
+
+  assert.ok(run.token.length < legacyRunToken.length);
+  assert.ok(scan.token.length < legacyScanToken.length * 0.4);
+  assert.equal(verifyRunToken(legacyRunToken, { mode: "setups", now: NOW }).mode, "setups");
+  assert.equal(
+    verifyScanEvidenceToken(legacyScanToken, { run: run.payload, now: NOW + 2_000 }).mode,
+    "setups",
+  );
+
+  const last = scan.token.at(-1);
+  const corrupted = `${scan.token.slice(0, -1)}${last === "A" ? "B" : "A"}`;
+  assert.throws(
+    () => verifyScanEvidenceToken(corrupted, { run: run.payload, now: NOW + 2_000 }),
+    /invalid scan token signature/,
+  );
+});
+
+test("renderer identifies the corrupted snapshot position", () => {
+  const run = makeRun("setups");
+  const scan = makeScan(run, [...TRADE_SYMBOLS, BTC_SYMBOL]);
+  const sol = makeSnapshot(run, scan, "SOL_USDT");
+  const doge = makeSnapshot(run, scan, "DOGE_USDT");
+  const last = doge.token.at(-1);
+  const corruptedDoge = `${doge.token.slice(0, -1)}${last === "A" ? "B" : "A"}`;
+
+  assert.throws(
+    () =>
+      buildVerifiedCard({
+        runToken: run.token,
+        scanEvidenceToken: scan.token,
+        snapshotEvidenceTokens: [sol.token, corruptedDoge],
+        mode: "setups",
+        lead: "Сетапы",
+        marketRows: rows(),
+        candidates: [],
+        conclusion: "Проверка",
+        now: NOW + 3_000,
+      }),
+    /snapshot token #2 has invalid signature; refresh this snapshot/,
   );
 });
 
