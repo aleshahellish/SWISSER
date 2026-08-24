@@ -259,8 +259,38 @@ class _StructureLayer:
                 self.low,
             )
 
-    def public(self, recent_limit: int) -> dict[str, Any]:
-        latest = self.events[-1] if self.events else None
+    def public(
+        self,
+        recent_limit: int,
+        latest_bar_index: int | None,
+    ) -> dict[str, Any]:
+        def with_freshness(event: dict[str, Any]) -> dict[str, Any]:
+            item = dict(event)
+            event_index = item.get("bar_index")
+            item["bars_since"] = (
+                latest_bar_index - event_index
+                if isinstance(latest_bar_index, int)
+                and isinstance(event_index, int)
+                and latest_bar_index >= event_index
+                else None
+            )
+            return item
+
+        recent = [
+            with_freshness(event)
+            for event in self.events[-recent_limit:]
+        ]
+        latest = recent[-1] if recent else None
+        if latest is not None:
+            active_direction = latest.get("direction")
+            active_leg_origin_choch = None
+            for event in reversed(self.events):
+                if event.get("direction") != active_direction:
+                    break
+                if event.get("event_type") == "CHOCH":
+                    active_leg_origin_choch = with_freshness(event)
+                    break
+            latest["active_leg_origin_choch"] = active_leg_origin_choch
         return {
             "length": self.length,
             "current_direction": _direction_name(self.trend),
@@ -268,7 +298,7 @@ class _StructureLayer:
             "current_high": self.high.public(),
             "current_low": self.low.public(),
             "event_count": len(self.events),
-            "recent_events": self.events[-recent_limit:],
+            "recent_events": recent,
         }
 
 
@@ -330,8 +360,8 @@ def luxalgo_market_structure(
         },
         "tradingview_profile": dict(USER_TRADINGVIEW_PROFILE),
         "candles_processed": len(ordered),
-        "internal": internal.public(recent_limit),
-        "swing": swing.public(recent_limit),
+        "internal": internal.public(recent_limit, len(ordered) - 1),
+        "swing": swing.public(recent_limit, len(ordered) - 1),
     }
 
 
@@ -383,6 +413,7 @@ def reference_structure_summary(
             "length": swing.get("length"),
             "direction": swing_direction,
             "latest_event": swing.get("latest_event"),
+            "recent_events": swing.get("recent_events") or [],
         },
         "operational": {
             "layer": "LUXALGO_INTERNAL",
@@ -390,6 +421,7 @@ def reference_structure_summary(
             "length": internal.get("length"),
             "direction": internal_direction,
             "latest_event": internal.get("latest_event"),
+            "recent_events": internal.get("recent_events") or [],
         },
     }
 
@@ -452,5 +484,6 @@ def reference_bias_signal(
         ),
         "latest_swing_event": strategic.get("latest_event"),
         "latest_internal_event": operational.get("latest_event"),
+        "recent_internal_events": operational.get("recent_events") or [],
         "internal_conflicts": conflicts,
     }

@@ -330,6 +330,7 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
             "structure_relation": "PARTIAL_REFERENCE_DATA",
             "latest_swing_event": None,
             "latest_internal_event": None,
+            "recent_internal_events": [],
             "latest_trigger": _latest_trigger({}),
             "closure_sequence": {},
             "opposite_closure_to_primary_direction": {
@@ -384,6 +385,7 @@ def _timeframe_signal(timeframe: str, timeframe_data: dict | None) -> dict:
         "structure_relation": bias["structure_relation"],
         "latest_swing_event": bias["latest_swing_event"],
         "latest_internal_event": bias["latest_internal_event"],
+        "recent_internal_events": bias["recent_internal_events"],
         "latest_trigger": _latest_trigger(timeframe_data),
         "closure_sequence": sequence,
         "opposite_closure_to_primary_direction": opposite_warning,

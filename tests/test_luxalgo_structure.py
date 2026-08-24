@@ -68,8 +68,10 @@ class LuxAlgoStructureTests(unittest.TestCase):
         self.assertEqual(events[-2]["event_type"], "BOS")
         self.assertEqual(events[-2]["direction"], "BULLISH")
         self.assertEqual(events[-2]["bar_index"], 14)
+        self.assertEqual(events[-2]["bars_since"], 3)
         self.assertEqual(events[-1]["event_type"], "CHOCH")
         self.assertEqual(events[-1]["direction"], "BEARISH")
+        self.assertEqual(events[-1]["bars_since"], 0)
         self.assertEqual(result["internal"]["current_direction"], "BEARISH")
 
     def test_default_settings_match_users_structure_settings(self):
