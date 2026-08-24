@@ -1,5 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { createHmac, randomUUID } from "node:crypto";
 
 export const TRADE_SYMBOLS = [
   "TAO_USDT",
@@ -12,19 +11,15 @@ export const TRADE_SYMBOLS = [
 export const BTC_SYMBOL = "BTC_USDT";
 export const SUPPORTED_SYMBOLS = [...TRADE_SYMBOLS, BTC_SYMBOL];
 
-// One atomic workflow token replaces the former run + scan + N snapshot tokens.
 // Five minutes is long enough for ChatGPT reasoning while keeping a 1m entry cut fresh.
-export const EVIDENCE_TTL_MS = 300_000;
+export const WORKFLOW_TTL_MS = 300_000;
 
-const TOKEN_VERSION = 2;
-const TOKEN_FORMAT = "z2";
-const MAX_ENCODED_TOKEN_PAYLOAD_LENGTH = 12_288;
-const MAX_DECODED_TOKEN_PAYLOAD_LENGTH = 49_152;
+const STATE_VERSION = 3;
 const SOURCE_AGE_TOLERANCE_MS = 90_000;
 const FUTURE_CLOCK_TOLERANCE_MS = 15_000;
-const TOKEN_SECRET =
-  process.env.SWISSER_EVIDENCE_SECRET ??
-  "swisser-evidence-integrity-v1-not-an-authentication-secret";
+const SESSION_SECRET =
+  process.env.SWISSER_SESSION_SECRET ??
+  "swisser-session-binding-v3-not-an-authentication-secret";
 
 const MODE_ALIASES = {
   overview: "overview",
@@ -56,80 +51,9 @@ function uniqueSymbols(values, { tradeOnly = false } = {}) {
   return result;
 }
 
-function signature(signedPayload) {
-  return createHmac("sha256", TOKEN_SECRET)
-    .update(signedPayload)
-    .digest("base64url");
-}
-
-function encodeToken(payload) {
-  const encodedPayload = deflateRawSync(Buffer.from(JSON.stringify(payload)), {
-    level: 9,
-  }).toString("base64url");
-  const signedPayload = `${TOKEN_FORMAT}.${encodedPayload}`;
-  return `${signedPayload}.${signature(signedPayload)}`;
-}
-
-function constantTimeEqual(left, right) {
-  const a = Buffer.from(String(left));
-  const b = Buffer.from(String(right));
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function decodeWorkflowToken(token, now = Date.now()) {
-  const parts = String(token || "").split(".");
-  if (parts.length !== 3 || parts[0] !== TOKEN_FORMAT) {
-    if (parts[0] === "z1") {
-      fail("obsolete evidence token; refresh SWISSER and start a new analysis");
-    }
-    fail("malformed workflow token");
-  }
-
-  const [, encodedPayload, suppliedSignature] = parts;
-  if (
-    !encodedPayload ||
-    !suppliedSignature ||
-    encodedPayload.length > MAX_ENCODED_TOKEN_PAYLOAD_LENGTH
-  ) {
-    fail("malformed workflow token");
-  }
-
-  const signedPayload = `${TOKEN_FORMAT}.${encodedPayload}`;
-  if (!constantTimeEqual(signature(signedPayload), suppliedSignature)) {
-    fail("invalid workflow token signature");
-  }
-
-  let payload;
-  try {
-    const json = inflateRawSync(Buffer.from(encodedPayload, "base64url"), {
-      maxOutputLength: MAX_DECODED_TOKEN_PAYLOAD_LENGTH,
-    }).toString("utf8");
-    if (json.length > MAX_DECODED_TOKEN_PAYLOAD_LENGTH) {
-      fail("invalid workflow token payload");
-    }
-    payload = JSON.parse(json);
-  } catch {
-    fail("invalid workflow token payload");
-  }
-
-  if (payload.v !== TOKEN_VERSION || payload.type !== "workflow") {
-    fail("expected current workflow token");
-  }
-  if (!Number.isFinite(payload.iat) || !Number.isFinite(payload.exp)) {
-    fail("workflow token has no valid lifetime");
-  }
-  if (payload.iat > now + FUTURE_CLOCK_TOLERANCE_MS) {
-    fail("workflow token is from the future");
-  }
-  if (payload.exp < now) {
-    fail("workflow evidence expired; collect one new market cut");
-  }
-  return payload;
-}
-
 function sessionBinding(session) {
   if (!session) return null;
-  return createHmac("sha256", TOKEN_SECRET)
+  return createHmac("sha256", SESSION_SECRET)
     .update(`session:${session}`)
     .digest("base64url")
     .slice(0, 24);
@@ -257,7 +181,7 @@ function validateModeSymbols(mode, expectedSymbols, requestedSymbols) {
   return { expected, requested };
 }
 
-export function createScanWorkflowEvidence({
+export function createScanWorkflowState({
   mode,
   expectedSymbols = [],
   session = null,
@@ -296,7 +220,7 @@ export function createScanWorkflowEvidence({
     data.results.map((item) => [item.symbol, summarizeMarketItem(item)]),
   );
   const payload = {
-    v: TOKEN_VERSION,
+    v: STATE_VERSION,
     type: "workflow",
     stage: "scan",
     run_id: runId,
@@ -307,16 +231,27 @@ export function createScanWorkflowEvidence({
     snapshots: {},
     session: sessionBinding(session),
     iat: now,
-    exp: sourceMs + EVIDENCE_TTL_MS,
+    exp: sourceMs + WORKFLOW_TTL_MS,
   };
-  return { token: encodeToken(payload), payload };
+  return payload;
 }
 
-export function verifyWorkflowEvidenceToken(
-  token,
+export function verifyWorkflowPayload(
+  payload,
   { mode, stage = null, session = null, now = Date.now() } = {},
 ) {
-  const payload = decodeWorkflowToken(token, now);
+  if (!payload || payload.v !== STATE_VERSION || payload.type !== "workflow") {
+    fail("expected current workflow state");
+  }
+  if (!Number.isFinite(payload.iat) || !Number.isFinite(payload.exp)) {
+    fail("workflow state has no valid lifetime");
+  }
+  if (payload.iat > now + FUTURE_CLOCK_TOLERANCE_MS) {
+    fail("workflow state is from the future");
+  }
+  if (payload.exp < now) {
+    fail("workflow state expired; collect one new market cut");
+  }
   assertSession(payload, session);
   if (mode && payload.mode !== canonicalMode(mode)) fail("workflow mode mismatch");
   const allowedStages = stage == null ? null : Array.isArray(stage) ? stage : [stage];
@@ -326,7 +261,7 @@ export function verifyWorkflowEvidenceToken(
   return payload;
 }
 
-export function createSnapshotBundleEvidence({
+export function createSnapshotBundleState({
   workflow,
   dataBySymbol,
   symbols,
@@ -379,7 +314,7 @@ export function createSnapshotBundleEvidence({
     snapshots,
     iat: now,
   };
-  return { token: encodeToken(payload), payload };
+  return payload;
 }
 
 function shortSymbol(symbol) {
@@ -428,7 +363,7 @@ function directionFamily(value) {
 }
 
 export function buildVerifiedCard({
-  evidenceToken,
+  workflow: suppliedWorkflow,
   mode,
   lead,
   marketRows,
@@ -436,9 +371,10 @@ export function buildVerifiedCard({
   conclusion,
   session = null,
   now = Date.now(),
+  protocol = "server-state-v3",
 } = {}) {
   const canonical = canonicalMode(mode);
-  const workflow = verifyWorkflowEvidenceToken(evidenceToken, {
+  const workflow = verifyWorkflowPayload(suppliedWorkflow, {
     mode: canonical,
     session,
     now,
@@ -529,7 +465,7 @@ export function buildVerifiedCard({
     conclusion,
     source_integrity: {
       verified: true,
-      protocol: "atomic-v2",
+      protocol,
       run_id: workflow.run_id,
       scan_fetched_at_unix: Math.round(workflow.scan.source_ms / 1000),
       snapshot_fetched_at_unix: Object.fromEntries(

@@ -78,7 +78,7 @@ function assertEmbeddedScriptParses(html) {
   assert.doesNotThrow(() => new Function(script));
 }
 
-test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI", async (t) => {
+test("SWISSER MCP exposes self-healing server-state workflow and compatible UI", async (t) => {
   const { server, url } = await startServer();
   t.after(() => server.close());
 
@@ -88,15 +88,16 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.8.0");
+  assert.equal(initialized.result.serverInfo.version, "1.9.0");
   assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
-  assert.match(initialized.result.instructions, /только один evidence_token/);
+  assert.match(initialized.result.instructions, /короткий workflow_id/);
+  assert.match(initialized.result.instructions, /Никогда не передавай evidence_token/);
+  assert.match(initialized.result.instructions, /сам восстановит один свежий market cut/);
   assert.match(initialized.result.instructions, /одним get_swisser_candidate_snapshots/);
   assert.doesNotMatch(
     initialized.result.instructions,
     /start_swisser_run|get_swisser_market_snapshot|run_token|scan_evidence_token|snapshot_evidence_token/,
   );
-  assert.match(initialized.result.instructions, /[Бб]ез проверенного свежего evidence renderer обязан отказать/);
   assert.match(initialized.result.instructions, /«3» — entry/);
   assert.match(initialized.result.instructions, /последнего результата «Лучшие сетапы»/);
   assert.match(initialized.result.instructions, /исходный срез и исходный рейтинг/);
@@ -111,25 +112,27 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   ]);
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.8.0.html",
+    "ui://swisser/market-controls/1.9.0.html",
   );
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v6.html",
+    "ui://swisser/market-card-v7.html",
   );
   const scannerProperties = tools.result.tools[0].inputSchema.properties;
   assert.ok(scannerProperties.mode);
   assert.ok(scannerProperties.expected_symbols);
   assert.equal(scannerProperties.run_token, undefined);
   const snapshotProperties = tools.result.tools[1].inputSchema.properties;
-  assert.ok(snapshotProperties.evidence_token);
+  assert.ok(snapshotProperties.mode);
+  assert.ok(snapshotProperties.workflow_id);
   assert.ok(snapshotProperties.symbols);
-  assert.equal(snapshotProperties.scan_evidence_token, undefined);
+  assert.equal(snapshotProperties.evidence_token, undefined);
   const rendererProperties = tools.result.tools[2].inputSchema.properties;
   assert.equal(rendererProperties.cut_time, undefined);
   assert.equal(rendererProperties.btc_price, undefined);
   assert.equal(rendererProperties.btc_structure, undefined);
-  assert.ok(rendererProperties.evidence_token);
+  assert.ok(rendererProperties.workflow_id);
+  assert.equal(rendererProperties.evidence_token, undefined);
   assert.equal(rendererProperties.run_token, undefined);
   assert.equal(rendererProperties.scan_evidence_token, undefined);
   assert.equal(rendererProperties.snapshot_evidence_tokens, undefined);
@@ -148,7 +151,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.8.0.html",
+    uri: "ui://swisser/market-controls/1.9.0.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -173,6 +176,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assert.match(COMMANDS[2], /отсутствие не является veto/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.9.0.html",
     "ui://swisser/market-controls/1.8.0.html",
     "ui://swisser/market-controls/1.7.3.html",
     "ui://swisser/market-controls/1.7.1.html",
@@ -188,6 +192,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     "ui://swisser/market-controls-v1.html",
   ];
   const supportedCards = [
+    "ui://swisser/market-card-v7.html",
     "ui://swisser/market-card-v6.html",
     "ui://swisser/market-card-v5.html",
     "ui://swisser/market-card-v4.html",
@@ -213,7 +218,8 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
       upstreamCalls.push(target.pathname);
       let body;
       if (target.pathname === "/api/scanner_action_v6") {
-        body = scannerData(symbols, scanTime);
+        const requested = target.searchParams.get("symbols").split(",");
+        body = scannerData(requested, scanTime);
       } else if (target.pathname === "/api/snapshot_action_v6") {
         const symbol = target.searchParams.get("symbol");
         body = snapshotData(symbol, scanTime + 1_000);
@@ -235,10 +241,10 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     name: "scan_swisser_markets",
     arguments: { mode: "setups", expected_symbols: [] },
   });
-  assert.match(scanned.result.structuredContent.evidence_token, /^z2\./);
+  assert.match(scanned.result.structuredContent.workflow_id, /^[0-9a-f-]{36}$/i);
   assert.deepEqual(Object.keys(scanned.result.structuredContent).sort(), [
-    "evidence_token",
     "scan",
+    "workflow_id",
   ]);
   assert.ok(
     scanned.result.structuredContent.scan.results[0].hierarchy.active_trade_scenario,
@@ -252,14 +258,15 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   const bundled = await rpc(url, 7, "tools/call", {
     name: "get_swisser_candidate_snapshots",
     arguments: {
-      evidence_token: scanned.result.structuredContent.evidence_token,
+      mode: "setups",
+      workflow_id: scanned.result.structuredContent.workflow_id,
       symbols: ["SOL_USDT", "HYPE_USDT"],
     },
   });
   assert.equal(bundled.result.structuredContent.snapshots.length, 2);
   assert.deepEqual(Object.keys(bundled.result.structuredContent).sort(), [
-    "evidence_token",
     "snapshots",
+    "workflow_id",
   ]);
   assert.deepEqual(upstreamCalls, [
     "/api/scanner_action_v6",
@@ -269,7 +276,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
 
   const cardInput = {
     mode: "setups",
-    evidence_token: bundled.result.structuredContent.evidence_token,
+    workflow_id: bundled.result.structuredContent.workflow_id,
     lead: "Два равноценных сетапа",
     market_rows: TRADE_SYMBOLS.map((symbol) => ({
       symbol: symbol.replace("_USDT", ""),
@@ -292,6 +299,8 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
     arguments: cardInput,
   });
   assert.equal(rendered.result.structuredContent.source_integrity.verified, true);
+  assert.equal(rendered.result.structuredContent.source_integrity.protocol, "server-state-v3");
+  assert.equal(rendered.result.structuredContent.source_integrity.state_recovered, false);
   assert.equal(rendered.result.structuredContent.market_rows[0].price, "100.00");
   assert.equal(rendered.result.structuredContent.market_rows[0].h1, "Bull");
   assert.deepEqual(
@@ -304,7 +313,7 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   );
 
   const cardResource = await rpc(url, 9, "resources/read", {
-    uri: "ui://swisser/market-card-v6.html",
+    uri: "ui://swisser/market-card-v7.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Потенц\. PnL 6x/);
@@ -318,6 +327,64 @@ test("SWISSER MCP exposes evidence-gated three-stage workflow and compatible UI"
   assert.doesNotMatch(cardHtml, />RR</);
   assert.doesNotMatch(cardHtml, /innerHTML/);
   assertEmbeddedScriptParses(cardHtml);
+
+  const recoveredBundle = await rpc(url, 10, "tools/call", {
+    name: "get_swisser_candidate_snapshots",
+    arguments: {
+      mode: "setups",
+      workflow_id: "not-a-valid-workflow-id",
+      symbols: ["SOL_USDT", "HYPE_USDT"],
+    },
+  });
+  assert.equal(recoveredBundle.result.isError, undefined);
+  assert.equal(recoveredBundle.result.structuredContent.snapshots.length, 2);
+  assert.match(recoveredBundle.result.content[0].text, /автоматически восстановленного свежего среза/);
+
+  const recoveredCard = await rpc(url, 11, "tools/call", {
+    name: "render_swisser_market_card",
+    arguments: {
+      ...cardInput,
+      workflow_id: "another-corrupted-id",
+    },
+  });
+  assert.equal(recoveredCard.result.isError, undefined);
+  assert.equal(recoveredCard.result.structuredContent.source_integrity.verified, true);
+  assert.equal(recoveredCard.result.structuredContent.source_integrity.state_recovered, true);
+
+  const entryScan = await rpc(url, 12, "tools/call", {
+    name: "scan_swisser_markets",
+    arguments: {
+      mode: "entry",
+      expected_symbols: ["SOL_USDT", "HYPE_USDT"],
+    },
+  });
+  assert.equal(entryScan.result.structuredContent.scan.results.length, 3);
+
+  const recoveredEntryBundle = await rpc(url, 13, "tools/call", {
+    name: "get_swisser_candidate_snapshots",
+    arguments: {
+      mode: "entry",
+      workflow_id: "broken-entry-id",
+      symbols: ["SOL_USDT", "HYPE_USDT"],
+    },
+  });
+  assert.equal(recoveredEntryBundle.result.structuredContent.snapshots.length, 2);
+
+  const entryCard = await rpc(url, 14, "tools/call", {
+    name: "render_swisser_market_card",
+    arguments: {
+      ...cardInput,
+      mode: "entry",
+      workflow_id: "broken-entry-renderer-id",
+      market_rows: cardInput.market_rows.filter((row) => ["SOL", "HYPE"].includes(row.symbol)),
+    },
+  });
+  assert.equal(entryCard.result.structuredContent.market_rows.length, 2);
+  assert.equal(entryCard.result.structuredContent.source_integrity.state_recovered, true);
+  assert.deepEqual(
+    [...entryCard.result.structuredContent.commands[2].expected_symbols].sort(),
+    ["HYPE_USDT", "SOL_USDT"],
+  );
 
   for (const [index, uri] of [...supportedControls.slice(1), ...supportedCards.slice(1)].entries()) {
     const compatible = await rpc(url, 20 + index, "resources/read", { uri });
