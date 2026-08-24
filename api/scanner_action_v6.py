@@ -1056,7 +1056,7 @@ def encode_gpt_action_payload(result: dict) -> bytes:
 
 
 def compact_for_gpt_action(full_result: dict) -> dict:
-    """Сокращает ответ scanner_v6 для лимита GPT Actions."""
+    """Сокращает внутренний scanner для безопасной передачи в MCP/API."""
 
     compact_result = {
         "ok": full_result.get("ok"),

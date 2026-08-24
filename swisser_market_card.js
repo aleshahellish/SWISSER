@@ -1,5 +1,6 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v5.html";
+export const MARKET_CARD_URI = "ui://swisser/market-card-v6.html";
 export const LEGACY_MARKET_CARD_URIS = [
+  "ui://swisser/market-card-v5.html",
   "ui://swisser/market-card-v4.html",
   "ui://swisser/market-card-v3.html",
   "ui://swisser/market-card-v2.html",
@@ -329,8 +330,8 @@ export const marketCardHtml = String.raw`<!doctype html>
       const expected = command.expected_symbols || [];
       if (command.mode !== "entry" || !expected.length) return command.prompt;
       return command.prompt + "\n\nСохранённые кандидаты этой карточки: "
-        + expected.join(", ") + ". Перед scanner вызови start_swisser_run "
-        + "с mode=entry и ровно этим expected_symbols.";
+        + expected.join(", ") + ". Вызови scan_swisser_markets с mode=entry "
+        + "и передай ровно этот список как expected_symbols.";
     }
 
     async function sendCommand(command, buttons) {
