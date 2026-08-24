@@ -18,14 +18,18 @@ import {
   TRADE_SYMBOLS,
   buildVerifiedCard,
   canonicalMode,
-  createScanWorkflowEvidence,
-  createSnapshotBundleEvidence,
-  verifyWorkflowEvidenceToken,
+  createScanWorkflowState,
+  createSnapshotBundleState,
 } from "../swisser_evidence.js";
+import {
+  loadWorkflowState,
+  saveWorkflowState,
+} from "../swisser_workflow_store.js";
 
-const SERVER_VERSION = "1.8.0";
-const CONTROLS_URI = "ui://swisser/market-controls/1.8.0.html";
+const SERVER_VERSION = "1.9.0";
+const CONTROLS_URI = "ui://swisser/market-controls/1.9.0.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.8.0.html",
   "ui://swisser/market-controls/1.7.3.html",
   "ui://swisser/market-controls/1.7.1.html",
   "ui://swisser/market-controls/1.7.0.html",
@@ -43,9 +47,9 @@ const SERVER_ICON = "https://tao-mexc-live.vercel.app/swisser-icon.svg";
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
 
 export const COMMANDS = [
-  "Собери нейтральный обзор рынка без выбора лучших. Вызови scan_swisser_markets с mode=overview: scanner сам создаст свежий атомарный запуск и вернёт evidence_token. BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме overview с тем же evidence_token. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Найди лучшие сетапы на всём рынке. Вызови scan_swisser_markets с mode=setups: scanner сам создаст свежий атомарный запуск. Выбери действительно конкурентных кандидатов без заранее заданного количества. Затем одним вызовом get_swisser_candidate_snapshots передай evidence_token scanner и весь массив выбранных symbols; используй только новый evidence_token пакета. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме setups с последним evidence_token. Если конкурентных кандидатов нет, не вызывай snapshots и передай renderer токен scanner. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Вызови scan_swisser_markets с mode=entry и expected_symbols из сохранённого набора; scanner сам создаст свежий атомарный запуск. Не добавляй остальные монеты и не формируй новый рейтинг. Затем одним вызовом get_swisser_candidate_snapshots передай evidence_token scanner и весь сохранённый набор. На 1m потребуй свежий значимый LuxAlgo internal CHoCH; если последним событием уже стал BOS, проверь, что он продолжает ту же CHoCH-цепочку. BOS, displacement и завершённый откат/ретест усиливают вход. C2/C3 используй только как дополнительный контекст: их наличие не обязательно, а отсутствие не является veto. Проверь также опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме entry с новым evidence_token пакета. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Собери нейтральный обзор рынка без выбора лучших. Вызови scan_swisser_markets с mode=overview: scanner сам создаст свежий серверный запуск и вернёт короткий workflow_id. BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме overview; передай workflow_id, если он доступен. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Найди лучшие сетапы на всём рынке. Вызови scan_swisser_markets с mode=setups: scanner сам создаст свежий серверный запуск. Выбери действительно конкурентных кандидатов без заранее заданного количества. Затем одним вызовом get_swisser_candidate_snapshots передай mode=setups, короткий workflow_id, если он доступен, и весь массив выбранных symbols. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме setups с последним workflow_id, если он доступен. Если ID потерян или искажён, сервер сам соберёт новый свежий срез. Если кандидатов нет, snapshots не вызывай. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Вызови scan_swisser_markets с mode=entry и expected_symbols из сохранённого набора; scanner сам создаст свежий серверный запуск. Не добавляй остальные монеты и не формируй новый рейтинг. Затем одним вызовом get_swisser_candidate_snapshots передай mode=entry, короткий workflow_id, если он доступен, и весь сохранённый набор symbols. На 1m потребуй свежий значимый LuxAlgo internal CHoCH; если последним событием уже стал BOS, проверь, что он продолжает ту же CHoCH-цепочку. BOS, displacement и завершённый откат/ретест усиливают вход. C2/C3 используй только как дополнительный контекст: их наличие не обязательно, а отсутствие не является veto. Проверь также опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме entry с последним workflow_id, если он доступен. Если ID потерян или искажён, сервер сам соберёт новый свежий срез. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
 ];
 
 export const COMMAND_LABELS = [
@@ -529,8 +533,203 @@ async function fetchFreshSnapshot(symbol, scanSourceMs) {
   throw new Error(`SWISSER integrity error: snapshot ${symbol} stayed older than scanner`);
 }
 
+function sameSymbolSet(left, right) {
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.length === b.length && a.every((symbol, index) => symbol === b[index]);
+}
+
+function fullSymbol(symbol) {
+  const normalized = String(symbol || "").trim().toUpperCase();
+  return normalized.endsWith("_USDT") ? normalized : `${normalized}_USDT`;
+}
+
+async function fetchSnapshotMap(symbols, scanSourceMs = null) {
+  const dataBySymbol = new Map();
+  for (let index = 0; index < symbols.length; index += 3) {
+    const batch = symbols.slice(index, index + 3);
+    const results = await Promise.all(
+      batch.map(async (symbol) => [
+        symbol,
+        scanSourceMs == null
+          ? await fetchSwisser("/api/snapshot_action_v6", { symbol })
+          : await fetchFreshSnapshot(symbol, scanSourceMs),
+      ]),
+    );
+    for (const [symbol, data] of results) dataBySymbol.set(symbol, data);
+  }
+  return dataBySymbol;
+}
+
+async function createFreshScan({ mode, expectedSymbols = [], session = null }) {
+  const canonical = canonicalMode(mode);
+  const requestedSymbols = requestedSymbolsForMode(canonical, expectedSymbols);
+  const data = await fetchSwisser("/api/scanner_action_v6", {
+    symbols: requestedSymbols.join(","),
+  });
+  const workflow = createScanWorkflowState({
+    mode: canonical,
+    expectedSymbols,
+    session,
+    data,
+    requestedSymbols,
+  });
+  return { data, workflow };
+}
+
+async function createFreshBundle({
+  mode,
+  expectedSymbols = [],
+  symbols,
+  session = null,
+}) {
+  const canonical = canonicalMode(mode);
+  const requestedSymbols = requestedSymbolsForMode(canonical, expectedSymbols);
+  // Scanner and initial snapshots are independent live reads. Starting them
+  // together keeps a cold-state recovery within one Vercel invocation.
+  const [data, initialSnapshots] = await Promise.all([
+    fetchSwisser("/api/scanner_action_v6", {
+      symbols: requestedSymbols.join(","),
+    }),
+    fetchSnapshotMap(symbols),
+  ]);
+  const scan = createScanWorkflowState({
+    mode: canonical,
+    expectedSymbols,
+    session,
+    data,
+    requestedSymbols,
+  });
+  const dataBySymbol = new Map();
+  for (const symbol of symbols) {
+    let snapshot = initialSnapshots.get(symbol);
+    if (Number(snapshot?.fetched_at_unix) * 1000 < scan.scan.source_ms) {
+      snapshot = await fetchFreshSnapshot(symbol, scan.scan.source_ms);
+    }
+    dataBySymbol.set(symbol, snapshot);
+  }
+  const workflow = createSnapshotBundleState({
+    workflow: scan,
+    dataBySymbol,
+    symbols,
+  });
+  return { data, dataBySymbol, workflow };
+}
+
+function requiredSnapshotsForCard(mode, marketRows, candidates) {
+  if (mode === "overview") return [];
+  if (mode === "entry") return marketRows.map((row) => fullSymbol(row.symbol));
+  const required = new Set(
+    candidates.map((candidate) => fullSymbol(candidate.symbol)),
+  );
+  for (const row of marketRows) {
+    if (["top", "secondary"].includes(row.priority)) {
+      required.add(fullSymbol(row.symbol));
+    }
+  }
+  return [...required];
+}
+
+function storedWorkflowMatches(workflow, { mode, expectedSymbols, requiredSnapshots }) {
+  if (!workflow) return false;
+  if (!sameSymbolSet(workflow.expected_symbols || [], expectedSymbols)) return false;
+  const tradeSymbols = (workflow.requested_symbols || []).filter(
+    (symbol) => symbol !== BTC_SYMBOL,
+  );
+  const expectedRequested = mode === "entry" ? expectedSymbols : TRADE_SYMBOLS;
+  if (!sameSymbolSet(tradeSymbols, expectedRequested)) return false;
+  const availableSnapshots = Object.keys(workflow.snapshots || {});
+  return requiredSnapshots.every((symbol) => availableSnapshots.includes(symbol));
+}
+
+async function workflowForSnapshots({ workflowId, mode, symbols, session }) {
+  const canonical = canonicalMode(mode);
+  const expectedSymbols = canonical === "entry" ? symbols : [];
+  let workflow = loadWorkflowState(workflowId, {
+    mode: canonical,
+    stage: "scan",
+    session,
+  });
+  let recovered = false;
+  let dataBySymbol;
+
+  if (storedWorkflowMatches(workflow, {
+    mode: canonical,
+    expectedSymbols,
+    requiredSnapshots: [],
+  })) {
+    dataBySymbol = await fetchSnapshotMap(symbols, workflow.scan.source_ms);
+    workflow = createSnapshotBundleState({
+      workflow,
+      dataBySymbol,
+      symbols,
+    });
+  } else {
+    recovered = true;
+    const fresh = await createFreshBundle({
+      mode: canonical,
+      expectedSymbols,
+      symbols,
+      session,
+    });
+    workflow = fresh.workflow;
+    dataBySymbol = fresh.dataBySymbol;
+  }
+
+  return {
+    workflow,
+    workflowId: saveWorkflowState(workflow),
+    dataBySymbol,
+    recovered,
+  };
+}
+
+async function workflowForRenderer({ input, session }) {
+  const canonical = canonicalMode(input.mode);
+  const rowSymbols = input.market_rows.map((row) => fullSymbol(row.symbol));
+  const expectedSymbols = canonical === "entry" ? rowSymbols : [];
+  const requiredSnapshots = requiredSnapshotsForCard(
+    canonical,
+    input.market_rows,
+    input.candidates,
+  );
+  const requiredStage = requiredSnapshots.length ? "bundle" : "scan";
+  let workflow = loadWorkflowState(input.workflow_id, {
+    mode: canonical,
+    stage: requiredStage,
+    session,
+  });
+  let recovered = false;
+
+  if (!storedWorkflowMatches(workflow, {
+    mode: canonical,
+    expectedSymbols,
+    requiredSnapshots,
+  })) {
+    recovered = true;
+    workflow = requiredSnapshots.length
+      ? (await createFreshBundle({
+        mode: canonical,
+        expectedSymbols,
+        symbols: requiredSnapshots,
+        session,
+      })).workflow
+      : (await createFreshScan({
+        mode: canonical,
+        expectedSymbols,
+        session,
+      })).workflow;
+    saveWorkflowState(workflow);
+  }
+
+  return { workflow, recovered };
+}
+
 function commandPayloads(card) {
-  const currentCandidates = (card.candidates || []).map(
+  const candidateRows = card.mode === "entry"
+    ? card.market_rows || []
+    : card.candidates || [];
+  const currentCandidates = candidateRows.map(
     (candidate) => `${candidate.symbol}_USDT`,
   );
   return COMMANDS.map((prompt, index) => ({
@@ -556,12 +755,12 @@ export function createSwisserMcpServer() {
   }, {
     instructions:
       "ОБЯЗАТЕЛЬНО: каждый рыночный запуск SWISSER начинай одним scan_swisser_markets с нужным mode; scanner сам " +
-      "создаёт новый атомарный запуск. В каждый следующий инструмент передавай только один evidence_token дословно " +
-      "из structuredContent последнего успешного этапа. Других token-полей в текущем протоколе нет. " +
-      "Для setups и entry получай все нужные snapshots одним " +
-      "get_swisser_candidate_snapshots и затем сразу вызывай render_swisser_market_card с новым evidence_token пакета. " +
-      "Для overview передавай renderer токен scanner. При технической ошибке допустим только один полностью новый " +
-      "scanner-проход; не накапливай параллельные запуски. Без проверенного свежего evidence renderer обязан отказать. Структура, цены и " +
+      "создаёт новый свежий серверный запуск и возвращает короткий workflow_id. Для setups и entry получай все нужные " +
+      "snapshots одним get_swisser_candidate_snapshots, передавая mode, symbols и workflow_id, если он доступен. Затем " +
+      "сразу вызывай render_swisser_market_card с последним workflow_id, если он доступен. Никогда не передавай " +
+      "evidence_token: полных подписанных токенов в текущем протоколе нет. Потерянный, искажённый или отсутствующий " +
+      "workflow_id не является причиной повторять вызовы вручную: инструмент сам восстановит один свежий market cut. " +
+      "Структура, цены и " +
       "время среза в карточке являются серверными полями: не передавай и не подменяй их вручную. " +
       "Обычная Markdown-таблица, список или PNG не заменяют renderer. После вызова не дублируй карточку текстом. " +
       "Точный запрос «1» означает режим overview («Обзор рынка»), «2» — setups («Лучшие сетапы»), " +
@@ -595,9 +794,10 @@ export function createSwisserMcpServer() {
     {
       title: "Сканировать рынок SWISSER",
       description:
-        "Сам создаёт один свежий атомарный запуск и возвращает единственный evidence_token. В overview/setups " +
+        "Сам создаёт один свежий серверный запуск и возвращает короткий необязательный workflow_id. В overview/setups " +
         "сервер всегда сканирует все шесть торговых монет плюс BTC. В entry передай ровно сохранённых кандидатов " +
-        "последней карточки setups. Для текущего сценария используй active_trade_scenario, не continuation_bias.",
+        "последней карточки setups. Если ID потеряется, следующий инструмент сам соберёт новый свежий срез. " +
+        "Для текущего сценария используй active_trade_scenario, не continuation_bias.",
       inputSchema: {
         mode: z.enum(["overview", "setups", "entry"]),
         expected_symbols: z
@@ -614,27 +814,22 @@ export function createSwisserMcpServer() {
     },
     async ({ mode, expected_symbols = [] }, extra) => {
       const canonical = canonicalMode(mode);
-      const requestedSymbols = requestedSymbolsForMode(canonical, expected_symbols);
-      const data = await fetchSwisser("/api/scanner_action_v6", {
-        symbols: requestedSymbols.join(","),
-      });
-      const evidence = createScanWorkflowEvidence({
+      const { data, workflow } = await createFreshScan({
         mode: canonical,
         expectedSymbols: expected_symbols,
         session: sessionId(extra),
-        data,
-        requestedSymbols,
       });
+      const workflowId = saveWorkflowState(workflow);
       return {
         content: [{
           type: "text",
           text:
             canonical === "overview"
-              ? "Свежий обзорный scanner проверен. Сразу передай evidence_token в renderer."
-              : "Свежий scanner проверен. Выбери кандидатов и одним вызовом получи пакет snapshots, передав этот evidence_token.",
+              ? "Свежий обзорный scanner проверен. Сразу вызови renderer; workflow_id можно передать для ускорения."
+              : "Свежий scanner проверен. Выбери кандидатов и одним вызовом получи пакет snapshots; workflow_id можно передать для ускорения.",
         }],
         structuredContent: {
-          evidence_token: evidence.token,
+          workflow_id: workflowId,
           scan: compactScanForModel(data),
         },
       };
@@ -646,11 +841,16 @@ export function createSwisserMcpServer() {
     {
       title: "Проверить кандидатов SWISSER одним пакетом",
       description:
-        "После scanner получает все выбранные snapshots одним вызовом и возвращает один новый атомарный " +
-        "evidence_token, содержащий scanner и весь пакет кандидатов. Для entry symbols должны точно совпасть с " +
-        "сохранённым набором. Не вызывай в overview.",
+        "После scanner получает все выбранные snapshots одним вызовом и возвращает новый короткий workflow_id. " +
+        "Если ID отсутствует, потерян или искажён, сервер сам создаёт новый свежий scanner и продолжает без " +
+        "использования старых данных. Для entry symbols должны точно совпасть с сохранённым набором. Не вызывай в overview.",
       inputSchema: {
-        evidence_token: z.string().min(20).describe("Единственный токен текущего scanner."),
+        mode: z.enum(["setups", "entry"]),
+        workflow_id: z
+          .string()
+          .max(80)
+          .optional()
+          .describe("Короткий ID scanner для ускорения; отсутствие или ошибка автоматически восстанавливаются."),
         symbols: z
           .array(z.enum(TRADE_SYMBOLS))
           .min(1)
@@ -665,38 +865,24 @@ export function createSwisserMcpServer() {
         openWorldHint: true,
       },
     },
-    async ({ evidence_token, symbols }, extra) => {
-      const workflow = verifyWorkflowEvidenceToken(evidence_token, {
-        stage: "scan",
-        session: sessionId(extra),
-      });
-      if (workflow.mode === "overview") {
-        throw new Error("SWISSER integrity error: overview must not use snapshots");
-      }
-      const dataBySymbol = new Map();
-      for (let index = 0; index < symbols.length; index += 3) {
-        const batch = symbols.slice(index, index + 3);
-        const results = await Promise.all(
-          batch.map(async (symbol) => [
-            symbol,
-            await fetchFreshSnapshot(symbol, workflow.scan.source_ms),
-          ]),
-        );
-        for (const [symbol, data] of results) dataBySymbol.set(symbol, data);
-      }
-      const evidence = createSnapshotBundleEvidence({
-        workflow,
-        dataBySymbol,
+    async ({ mode, workflow_id, symbols }, extra) => {
+      const result = await workflowForSnapshots({
+        workflowId: workflow_id,
+        mode,
         symbols,
+        session: sessionId(extra),
       });
       return {
         content: [{
           type: "text",
-          text: "Единый пакет snapshots проверен. Сразу передай новый evidence_token в renderer; токен scanner больше не используй.",
+          text: result.recovered
+            ? "Единый пакет snapshots построен из автоматически восстановленного свежего среза. Сразу вызови renderer."
+            : "Единый пакет snapshots проверен. Сразу вызови renderer; новый workflow_id можно передать для ускорения.",
         }],
         structuredContent: {
-          evidence_token: evidence.token,
-          snapshots: symbols.map((symbol) => compactSnapshotForModel(dataBySymbol.get(symbol))),
+          workflow_id: result.workflowId,
+          snapshots: symbols.map((symbol) =>
+            compactSnapshotForModel(result.dataBySymbol.get(symbol))),
         },
       };
     },
@@ -708,16 +894,20 @@ export function createSwisserMcpServer() {
     {
       title: "Показать проверенную карточку рынка SWISSER",
       description:
-        "Финальный renderer с жёсткой проверкой происхождения данных. Принимает ровно один evidence_token: scanner " +
-        "для overview или отсутствия кандидатов в setups; атомарный snapshot-пакет для кандидатов setups и всего entry. " +
-        "Цена, 4h/1h/15m/1m, активная идея, BTC и время карточки строятся сервером из evidence и не принимаются " +
+        "Финальный renderer с жёсткой проверкой свежести. Принимает необязательный короткий workflow_id. Если ID " +
+        "потерян, искажён или относится не к этому режиму, renderer сам получает новый свежий scanner и нужные snapshots. " +
+        "Цена, 4h/1h/15m/1m, активная идея, BTC и время карточки строятся сервером и не принимаются " +
         "от модели. В overview — шесть монет без кандидатов; в setups — шесть монет и любое число реальных " +
         "кандидатов; в entry — только сохранённый набор. Не показывай RR.",
       inputSchema: {
         mode: z
           .enum(["overview", "setups", "entry", "quick", "trades", "day"])
           .describe("Используй overview, setups или entry; старые aliases сохранены для совместимости."),
-        evidence_token: z.string().min(20).describe("Последний атомарный токен текущего этапа."),
+        workflow_id: z
+          .string()
+          .max(80)
+          .optional()
+          .describe("Короткий ID последнего этапа; отсутствие или ошибка автоматически восстанавливаются."),
         lead: z.string().min(1).max(180).describe("Один главный вывод над таблицей."),
         market_rows: z
           .array(
@@ -767,15 +957,21 @@ export function createSwisserMcpServer() {
       },
     },
     async (input, extra) => {
+      const state = await workflowForRenderer({
+        input,
+        session: sessionId(extra),
+      });
       const card = buildVerifiedCard({
-        evidenceToken: input.evidence_token,
+        workflow: state.workflow,
         mode: canonicalMode(input.mode),
         lead: input.lead,
         marketRows: input.market_rows,
         candidates: input.candidates,
         conclusion: input.conclusion,
         session: sessionId(extra),
+        protocol: "server-state-v3",
       });
+      card.source_integrity.state_recovered = state.recovered;
       return {
         content: [
           {

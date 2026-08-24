@@ -3,12 +3,12 @@ import test from "node:test";
 
 import {
   BTC_SYMBOL,
-  EVIDENCE_TTL_MS,
   TRADE_SYMBOLS,
+  WORKFLOW_TTL_MS,
   buildVerifiedCard,
-  createScanWorkflowEvidence,
-  createSnapshotBundleEvidence,
-  verifyWorkflowEvidenceToken,
+  createScanWorkflowState,
+  createSnapshotBundleState,
+  verifyWorkflowPayload,
 } from "../swisser_evidence.js";
 
 const NOW = Date.parse("2026-08-24T01:05:00.000Z");
@@ -91,7 +91,7 @@ function makeScan({
   const symbols = mode === "entry"
     ? [...expectedSymbols, BTC_SYMBOL]
     : [...TRADE_SYMBOLS, BTC_SYMBOL];
-  return createScanWorkflowEvidence({
+  return createScanWorkflowState({
     mode,
     expectedSymbols,
     session,
@@ -106,8 +106,8 @@ function makeBundle(scan, symbols, {
   sourceMs = NOW + 2_000,
   directions = {},
 } = {}) {
-  return createSnapshotBundleEvidence({
-    workflow: scan.payload,
+  return createSnapshotBundleState({
+    workflow: scan,
     symbols,
     dataBySymbol: new Map(
       symbols.map((symbol) => [
@@ -119,10 +119,10 @@ function makeBundle(scan, symbols, {
   });
 }
 
-test("overview card takes price, structure and cut time only from atomic scan evidence", () => {
+test("overview card takes price, structure and cut time only from server workflow state", () => {
   const scan = makeScan({ mode: "overview" });
   const card = buildVerifiedCard({
-    evidenceToken: scan.token,
+    workflow: scan,
     mode: "overview",
     lead: "Нейтральный обзор",
     marketRows: rows(),
@@ -132,7 +132,7 @@ test("overview card takes price, structure and cut time only from atomic scan ev
   });
 
   assert.equal(card.source_integrity.verified, true);
-  assert.equal(card.source_integrity.protocol, "atomic-v2");
+  assert.equal(card.source_integrity.protocol, "server-state-v3");
   assert.equal(card.market_rows[0].price, "100.00");
   assert.equal(card.market_rows[0].h1, "Bull");
   assert.notEqual(card.market_rows[0].price, "999999");
@@ -143,7 +143,7 @@ test("overview card takes price, structure and cut time only from atomic scan ev
 test("scanner creation rejects stale, incomplete and unsuccessful cuts", () => {
   const symbols = [...TRADE_SYMBOLS, BTC_SYMBOL];
   assert.throws(
-    () => createScanWorkflowEvidence({
+    () => createScanWorkflowState({
       mode: "overview",
       data: scanData(symbols, NOW - 100_000),
       requestedSymbols: symbols,
@@ -155,7 +155,7 @@ test("scanner creation rejects stale, incomplete and unsuccessful cuts", () => {
   const incomplete = scanData(symbols, NOW);
   incomplete.results.pop();
   assert.throws(
-    () => createScanWorkflowEvidence({
+    () => createScanWorkflowState({
       mode: "overview",
       data: incomplete,
       requestedSymbols: symbols,
@@ -167,7 +167,7 @@ test("scanner creation rejects stale, incomplete and unsuccessful cuts", () => {
   const unsuccessful = scanData(symbols, NOW);
   unsuccessful.results[0].ok = false;
   assert.throws(
-    () => createScanWorkflowEvidence({
+    () => createScanWorkflowState({
       mode: "overview",
       data: unsuccessful,
       requestedSymbols: symbols,
@@ -180,7 +180,7 @@ test("scanner creation rejects stale, incomplete and unsuccessful cuts", () => {
 test("mode fixes the scanner symbol set and entry requires saved candidates", () => {
   const all = [...TRADE_SYMBOLS, BTC_SYMBOL];
   assert.throws(
-    () => createScanWorkflowEvidence({
+    () => createScanWorkflowState({
       mode: "setups",
       expectedSymbols: ["SOL_USDT"],
       data: scanData(all, NOW),
@@ -190,7 +190,7 @@ test("mode fixes the scanner symbol set and entry requires saved candidates", ()
     /expected symbols are only valid for entry/,
   );
   assert.throws(
-    () => createScanWorkflowEvidence({
+    () => createScanWorkflowState({
       mode: "entry",
       expectedSymbols: [],
       data: scanData([BTC_SYMBOL], NOW),
@@ -201,64 +201,51 @@ test("mode fixes the scanner symbol set and entry requires saved candidates", ()
   );
 });
 
-test("one workflow token has a five-minute evidence window", () => {
+test("one server workflow has a five-minute evidence window", () => {
   const scan = makeScan();
-  assert.equal(scan.payload.exp, NOW + 1_000 + EVIDENCE_TTL_MS);
+  assert.equal(scan.exp, NOW + 1_000 + WORKFLOW_TTL_MS);
   assert.equal(
-    verifyWorkflowEvidenceToken(scan.token, { now: scan.payload.exp }).stage,
+    verifyWorkflowPayload(scan, { now: scan.exp }).stage,
     "scan",
   );
   assert.throws(
-    () => verifyWorkflowEvidenceToken(scan.token, { now: scan.payload.exp + 1 }),
-    /workflow evidence expired/,
+    () => verifyWorkflowPayload(scan, { now: scan.exp + 1 }),
+    /workflow state expired/,
   );
 });
 
-test("session binding and token signature remain strict", () => {
+test("session binding remains strict without a model-carried signature", () => {
   const scan = makeScan({ mode: "overview", session: "session-a" });
-  assert.match(scan.token, /^z2\./);
   assert.throws(
-    () => verifyWorkflowEvidenceToken(scan.token, {
+    () => verifyWorkflowPayload(scan, {
       session: "session-b",
       now: NOW + 2_000,
     }),
     /another ChatGPT session/,
   );
   assert.equal(
-    verifyWorkflowEvidenceToken(scan.token, {
+    verifyWorkflowPayload(scan, {
       session: "session-a",
       now: NOW + 2_000,
     }).mode,
     "overview",
   );
-
-  const last = scan.token.at(-1);
-  const corrupted = `${scan.token.slice(0, -1)}${last === "A" ? "B" : "A"}`;
-  assert.throws(
-    () => verifyWorkflowEvidenceToken(corrupted, { now: NOW + 2_000 }),
-    /invalid workflow token signature/,
-  );
-  assert.throws(
-    () => verifyWorkflowEvidenceToken("z1.old.signature", { now: NOW + 2_000 }),
-    /obsolete evidence token/,
-  );
 });
 
-test("all candidate snapshots become one internally consistent bundle token", () => {
+test("all candidate snapshots become one internally consistent server bundle", () => {
   const scan = makeScan({ runId: "one-run" });
   const bundle = makeBundle(scan, ["SOL_USDT", "DOGE_USDT"]);
-  const verified = verifyWorkflowEvidenceToken(bundle.token, {
+  const verified = verifyWorkflowPayload(bundle, {
     stage: "bundle",
     now: NOW + 3_000,
   });
 
   assert.equal(verified.run_id, "one-run");
   assert.deepEqual(Object.keys(verified.snapshots), ["SOL_USDT", "DOGE_USDT"]);
-  assert.equal(verified.scan.source_ms, scan.payload.scan.source_ms);
-  assert.ok(bundle.token.length < 1_600);
+  assert.equal(verified.scan.source_ms, scan.scan.source_ms);
   assert.throws(
-    () => createSnapshotBundleEvidence({
-      workflow: bundle.payload,
+    () => createSnapshotBundleState({
+      workflow: bundle,
       symbols: ["SOL_USDT"],
       dataBySymbol: new Map([
         ["SOL_USDT", snapshotData("SOL_USDT", NOW + 3_000)],
@@ -281,7 +268,7 @@ test("setups candidate and ranked tier require a snapshot in the same bundle", (
   const scan = makeScan();
   assert.throws(
     () => buildVerifiedCard({
-      evidenceToken: scan.token,
+      workflow: scan,
       mode: "setups",
       lead: "Сетапы",
       marketRows: rows(),
@@ -296,7 +283,7 @@ test("setups candidate and ranked tier require a snapshot in the same bundle", (
   rankedRows.find((row) => row.symbol === "SOL").priority = "top";
   assert.throws(
     () => buildVerifiedCard({
-      evidenceToken: scan.token,
+      workflow: scan,
       mode: "setups",
       lead: "Сетапы",
       marketRows: rankedRows,
@@ -315,7 +302,7 @@ test("renderer validates target/PnL pairs and candidate direction", () => {
   });
   assert.throws(
     () => buildVerifiedCard({
-      evidenceToken: bundle.token,
+      workflow: bundle,
       mode: "setups",
       lead: "Сетапы",
       marketRows: rows(),
@@ -327,7 +314,7 @@ test("renderer validates target/PnL pairs and candidate direction", () => {
   );
   assert.throws(
     () => buildVerifiedCard({
-      evidenceToken: bundle.token,
+      workflow: bundle,
       mode: "setups",
       lead: "Сетапы",
       marketRows: rows(),
@@ -349,7 +336,7 @@ test("entry bundle atomically requires every saved candidate and forbids additio
 
   const bundle = makeBundle(scan, expected);
   const card = buildVerifiedCard({
-    evidenceToken: bundle.token,
+    workflow: bundle,
     mode: "entry",
     lead: "Проверка входа",
     marketRows: rows(expected),
@@ -361,7 +348,7 @@ test("entry bundle atomically requires every saved candidate and forbids additio
 
   assert.throws(
     () => buildVerifiedCard({
-      evidenceToken: bundle.token,
+      workflow: bundle,
       mode: "entry",
       lead: "Проверка входа",
       marketRows: rows([...expected, "ETH_USDT"]),
@@ -373,23 +360,23 @@ test("entry bundle atomically requires every saved candidate and forbids additio
   );
 });
 
-test("tokens from independent retries cannot be partially combined", () => {
+test("states from independent retries cannot be partially combined", () => {
   const first = makeScan({ runId: "first-run" });
   const second = makeScan({ runId: "second-run", sourceMs: NOW + 2_000 });
   const firstBundle = makeBundle(first, ["SOL_USDT"], { sourceMs: NOW + 3_000 });
   const secondBundle = makeBundle(second, ["DOGE_USDT"], { sourceMs: NOW + 3_000 });
 
   assert.equal(
-    verifyWorkflowEvidenceToken(firstBundle.token, { now: NOW + 4_000 }).run_id,
+    verifyWorkflowPayload(firstBundle, { now: NOW + 4_000 }).run_id,
     "first-run",
   );
   assert.equal(
-    verifyWorkflowEvidenceToken(secondBundle.token, { now: NOW + 4_000 }).run_id,
+    verifyWorkflowPayload(secondBundle, { now: NOW + 4_000 }).run_id,
     "second-run",
   );
-  assert.equal(Object.keys(firstBundle.payload.snapshots).length, 1);
-  assert.equal(Object.keys(secondBundle.payload.snapshots).length, 1);
-  assert.equal("run_token" in firstBundle.payload, false);
-  assert.equal("scan_evidence_token" in firstBundle.payload, false);
-  assert.equal("snapshot_evidence_tokens" in firstBundle.payload, false);
+  assert.equal(Object.keys(firstBundle.snapshots).length, 1);
+  assert.equal(Object.keys(secondBundle.snapshots).length, 1);
+  assert.equal("run_token" in firstBundle, false);
+  assert.equal("scan_evidence_token" in firstBundle, false);
+  assert.equal("snapshot_evidence_tokens" in firstBundle, false);
 });
