@@ -1,5 +1,6 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v3.html";
+export const MARKET_CARD_URI = "ui://swisser/market-card-v4.html";
 export const LEGACY_MARKET_CARD_URIS = [
+  "ui://swisser/market-card-v3.html",
   "ui://swisser/market-card-v2.html",
   "ui://swisser/market-card-v1.html",
 ];
@@ -323,13 +324,37 @@ export const marketCardHtml = String.raw`<!doctype html>
       }
     }
 
-    async function sendCommand(prompt, buttons) {
+    function structuredContent(result) {
+      return result?.structuredContent
+        || result?.result?.structuredContent
+        || result?.call_tool_result?.structuredContent
+        || null;
+    }
+
+    async function freshPrompt(command) {
+      if (!window.openai?.callTool) return command.prompt;
+      if (command.mode === "entry" && !(command.expected_symbols || []).length) {
+        return command.prompt;
+      }
+      setCommandStatus("Создаю свежий запуск…");
+      const result = await window.openai.callTool("start_swisser_run", {
+        mode: command.mode,
+        expected_symbols: command.expected_symbols || [],
+      });
+      const runToken = structuredContent(result)?.run_token;
+      if (!runToken) throw new Error("SWISSER не выдал токен свежего запуска");
+      return command.prompt + "\n\nSWISSER_RUN_TOKEN: " + runToken
+        + "\nИспользуй именно этот токен во всех инструментах текущего запуска.";
+    }
+
+    async function sendCommand(command, buttons) {
       buttons.forEach((button) => { button.disabled = true; });
-      setCommandStatus("Отправляю…");
       try {
         if (!window.openai?.sendFollowUpMessage) {
           throw new Error("Команды недоступны в этом режиме ChatGPT");
         }
+        const prompt = await freshPrompt(command);
+        setCommandStatus("Отправляю…");
         await window.openai.sendFollowUpMessage({ prompt, scrollToBottom: true });
         setCommandStatus("Отправлено.", 1200);
       } catch (error) {
@@ -351,7 +376,7 @@ export const marketCardHtml = String.raw`<!doctype html>
         const number = appendText(button, "span", command.id || index + 1, "number");
         number.setAttribute("aria-hidden", "true");
         button.append(document.createTextNode(command.label || "Команда " + (index + 1)));
-        button.addEventListener("click", () => sendCommand(command.prompt, buttons));
+        button.addEventListener("click", () => sendCommand(command, buttons));
         commandBarNode.appendChild(button);
         return button;
       });

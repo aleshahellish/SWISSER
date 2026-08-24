@@ -12,10 +12,23 @@ import {
   MARKET_CARD_URI,
   marketCardHtml,
 } from "../swisser_market_card.js";
+import {
+  BTC_SYMBOL,
+  SUPPORTED_SYMBOLS,
+  TRADE_SYMBOLS,
+  buildVerifiedCard,
+  canonicalMode,
+  createRunToken,
+  createScanEvidenceToken,
+  createSnapshotEvidenceToken,
+  verifyRunToken,
+  verifyScanEvidenceToken,
+} from "../swisser_evidence.js";
 
-const SERVER_VERSION = "1.6.0";
-const CONTROLS_URI = "ui://swisser/market-controls/1.6.0.html";
+const SERVER_VERSION = "1.7.0";
+const CONTROLS_URI = "ui://swisser/market-controls/1.7.0.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.6.0.html",
   "ui://swisser/market-controls/1.5.1.html",
   "ui://swisser/market-controls/1.5.0.html",
   "ui://swisser/market-controls/1.4.1.html",
@@ -27,20 +40,11 @@ const LEGACY_CONTROLS_URIS = [
 ];
 const SERVER_ICON = "https://tao-mexc-live.vercel.app/swisser-icon.svg";
 const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.app";
-const SUPPORTED_SYMBOLS = [
-  "TAO_USDT",
-  "HYPE_USDT",
-  "SOL_USDT",
-  "XRP_USDT",
-  "DOGE_USDT",
-  "ETH_USDT",
-  "BTC_USDT",
-];
 
 export const COMMANDS = [
-  "Собери нейтральный обзор рынка без выбора лучших. Используй полный scan_swisser_markets по всем поддерживаемым символам; BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их, не формируй торговых кандидатов и не выдумывай отсутствующие детали. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме overview: шесть монет в фиксированном порядке, priority none, candidates пустой. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Найди лучшие сетапы на всём рынке. После полного scan_swisser_markets подробно проверь snapshot всех действительно конкурентных кандидатов. Не задавай количество заранее и не назначай единственного победителя, если данные не позволяют объективно разделить монеты: любое число равноценных кандидатов помести в один top-tier. Отдельно оцени качество сетапа и готовность входа; сильный свежий 1m BOS/CHoCH может сочетаться со статусом WAIT из-за опоздания. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме setups: все шесть монет и все реальные кандидаты без слабых заполнителей. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые последующими проверками. Не сканируй и не добавляй остальные монеты и не формируй новый рейтинг. Если такого результата ещё нет либо в нём не было кандидатов, коротко попроси сначала запустить «Лучшие сетапы». Для каждого сохранённого кандидата обнови scanner и подробный snapshot; на 1m проверь свежесть CHoCH/BOS, displacement, окончание отката или ретест, C2/C3, риск опоздания и инвалидацию. Для каждого дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА; допускай несколько одновременных входов без искусственного выбора одного. Если все сценарии отменены, предложи заново запустить «Лучшие сетапы». ОБЯЗАТЕЛЬНЫЙ финальный шаг после проверки — вызови render_swisser_market_card в режиме entry: в market_rows покажи проверенный прежний набор со статусом каждого, а в candidates оставь только неотменённые сценарии. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Собери нейтральный обзор рынка без выбора лучших. Если сообщение не содержит SWISSER_RUN_TOKEN, сначала вызови start_swisser_run с mode=overview. Передай run_token в полный scan_swisser_markets по всем поддерживаемым символам; BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме overview с теми же run_token и scan_evidence_token; structural fields и время renderer возьмёт из проверенного evidence. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Найди лучшие сетапы на всём рынке. Если сообщение не содержит SWISSER_RUN_TOKEN, сначала вызови start_swisser_run с mode=setups. Передай run_token в полный scan_swisser_markets, затем вместе с scan_evidence_token — в get_swisser_market_snapshot для каждого действительно конкурентного кандидата. Не задавай количество заранее и не назначай единственного победителя, если несколько монет равноценны. Отдельно оцени качество сетапа и готовность входа. ОБЯЗАТЕЛЬНЫЙ финальный шаг — вызови render_swisser_market_card в режиме setups с токенами этого же запуска; без свежего snapshot_evidence_token кандидат не может попасть в карточку. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Если сообщение не содержит SWISSER_RUN_TOKEN, сначала вызови start_swisser_run с mode=entry и expected_symbols из сохранённого набора. Не добавляй остальные монеты и не формируй новый рейтинг. Передай run_token в scanner только по сохранённому набору, затем вместе с scan_evidence_token вызови свежий snapshot каждого. На 1m проверь CHoCH/BOS, displacement, окончание отката/ретест, C2/C3, опоздание и инвалидацию; дай статус ВХОД ПОДТВЕРЖДЁН, ЖДАТЬ или ОТМЕНА. ОБЯЗАТЕЛЬНЫЙ финальный шаг — render_swisser_market_card в режиме entry с токенами текущего запуска. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
 ];
 
 export const COMMAND_LABELS = [
@@ -88,9 +92,9 @@ const controlsHtml = `<!doctype html>
       <button class="pin" id="pin" type="button" title="Оставить панель поверх чата">Закрепить</button>
     </div>
     <div class="commands">
-      <button class="command" type="button" data-command="${COMMANDS[0]}"><span class="number">1</span>${COMMAND_LABELS[0]}</button>
-      <button class="command" type="button" data-command="${COMMANDS[1]}"><span class="number">2</span>${COMMAND_LABELS[1]}</button>
-      <button class="command" type="button" data-command="${COMMANDS[2]}"><span class="number">3</span>${COMMAND_LABELS[2]}</button>
+      <button class="command" type="button" data-mode="overview" data-command="${COMMANDS[0]}"><span class="number">1</span>${COMMAND_LABELS[0]}</button>
+      <button class="command" type="button" data-mode="setups" data-command="${COMMANDS[1]}"><span class="number">2</span>${COMMAND_LABELS[1]}</button>
+      <button class="command" type="button" data-mode="entry" data-command="${COMMANDS[2]}"><span class="number">3</span>${COMMAND_LABELS[2]}</button>
     </div>
     <div class="status" id="status" role="status"></div>
   </section>
@@ -143,15 +147,39 @@ const controlsHtml = `<!doctype html>
       return false;
     }
 
-    async function send(prompt, button) {
+    function structuredContent(result) {
+      return result?.structuredContent
+        || result?.result?.structuredContent
+        || result?.call_tool_result?.structuredContent
+        || null;
+    }
+
+    async function freshPrompt(prompt, mode) {
+      if (!window.openai?.callTool) return prompt;
+      // The floating panel has no access to the latest setup card. For entry,
+      // let the model recover that saved set first and then start a bound run.
+      if (mode === "entry") return prompt;
+      setStatus("Создаю свежий запуск…");
+      const result = await window.openai.callTool("start_swisser_run", {
+        mode,
+        expected_symbols: [],
+      });
+      const runToken = structuredContent(result)?.run_token;
+      if (!runToken) throw new Error("SWISSER не выдал токен свежего запуска");
+      return prompt + "\\n\\nSWISSER_RUN_TOKEN: " + runToken
+        + "\\nИспользуй именно этот токен во всех инструментах текущего запуска.";
+    }
+
+    async function send(prompt, mode) {
       buttons.forEach((item) => { item.disabled = true; });
-      setStatus("Отправляю…");
       try {
         if (!window.openai?.sendFollowUpMessage) {
           throw new Error("Команды недоступны в этом режиме ChatGPT");
         }
+        const preparedPrompt = await freshPrompt(prompt, mode);
+        setStatus("Отправляю…");
         await requestPip({ force: true });
-        await window.openai.sendFollowUpMessage({ prompt, scrollToBottom: true });
+        await window.openai.sendFollowUpMessage({ prompt: preparedPrompt, scrollToBottom: true });
         setStatus("Отправлено.", 1200);
       } catch (error) {
         setStatus(error?.message || "Не удалось отправить запрос.");
@@ -161,7 +189,7 @@ const controlsHtml = `<!doctype html>
     }
 
     buttons.forEach((button) => {
-      button.addEventListener("click", () => send(button.dataset.command, button));
+      button.addEventListener("click", () => send(button.dataset.command, button.dataset.mode));
     });
 
     pinButton.addEventListener("click", () => requestPip({ manual: true, force: true }));
@@ -188,6 +216,7 @@ async function fetchSwisser(path, params) {
     }
   }
   const response = await fetch(url, {
+    cache: "no-store",
     headers: { accept: "application/json", "user-agent": "SWISSER-MCP/1.0" },
     signal: AbortSignal.timeout(58_000),
   });
@@ -197,6 +226,45 @@ async function fetchSwisser(path, params) {
     throw new Error("SWISSER API returned a non-JSON response");
   }
   return response.json();
+}
+
+function sessionId(extra) {
+  return extra?._meta?.["openai/session"] || null;
+}
+
+function sameSymbolSet(left, right) {
+  const a = [...new Set(left)].sort();
+  const b = [...new Set(right)].sort();
+  return a.length === b.length && a.every((symbol, index) => symbol === b[index]);
+}
+
+function requestedSymbolsForRun(run, supplied = []) {
+  if (run.mode !== "entry") return SUPPORTED_SYMBOLS;
+  const suppliedTrades = [...new Set(supplied.filter((symbol) => symbol !== BTC_SYMBOL))];
+  const expected = run.expected_symbols || [];
+  if (expected.length && suppliedTrades.length && !sameSymbolSet(expected, suppliedTrades)) {
+    throw new Error("SWISSER integrity error: entry scanner symbols do not match saved candidates");
+  }
+  const tradeSymbols = expected.length ? expected : suppliedTrades;
+  if (!tradeSymbols.length) {
+    throw new Error(
+      "SWISSER integrity error: entry run has no saved candidates; run «Лучшие сетапы» first",
+    );
+  }
+  return [...tradeSymbols, BTC_SYMBOL];
+}
+
+function commandPayloads(card) {
+  const currentCandidates = (card.candidates || []).map(
+    (candidate) => `${candidate.symbol}_USDT`,
+  );
+  return COMMANDS.map((prompt, index) => ({
+    id: index + 1,
+    label: COMMAND_LABELS[index],
+    prompt,
+    mode: ["overview", "setups", "entry"][index],
+    expected_symbols: index === 2 ? currentCandidates : [],
+  }));
 }
 
 export function createSwisserMcpServer() {
@@ -212,7 +280,11 @@ export function createSwisserMcpServer() {
     ],
   }, {
     instructions:
-      "ОБЯЗАТЕЛЬНО: каждый завершённый рыночный анализ SWISSER заканчивай вызовом render_swisser_market_card. " +
+      "ОБЯЗАТЕЛЬНО: каждый рыночный запуск SWISSER начинай с start_swisser_run и используй выданный run_token " +
+      "во всех последующих инструментах этого запуска. Не смешивай токены разных запусков. Каждый завершённый " +
+      "рыночный анализ заканчивай вызовом render_swisser_market_card с scan_evidence_token и всеми нужными " +
+      "snapshot_evidence_tokens; без проверенного свежего evidence renderer обязан отказать. Структура, цены и " +
+      "время среза в карточке являются серверными полями: не передавай и не подменяй их вручную. " +
       "Обычная Markdown-таблица, список или PNG не заменяют renderer. После вызова не дублируй карточку текстом. " +
       "Точный запрос «1» означает режим overview («Обзор рынка»), «2» — setups («Лучшие сетапы»), " +
       "«3» — entry («Проверить вход»); не проси расшифровку цифры. SWISSER анализирует MEXC Futures в трёх последовательных режимах. " +
@@ -238,20 +310,70 @@ export function createSwisserMcpServer() {
       "движение после среза, а не PnL сделки. Один эпизод не меняет веса ранжирования без серии наблюдений.",
   });
 
+  registerAppTool(
+    server,
+    "start_swisser_run",
+    {
+      title: "Начать свежий запуск SWISSER",
+      description:
+        "Создаёт короткоживущий токен одного свежего запуска. Вызывай первым для overview, setups или entry, " +
+        "если SWISSER_RUN_TOKEN не пришёл непосредственно от кнопки. Для entry передай ровно кандидатов из " +
+        "последней карточки setups; для overview/setups expected_symbols должен быть пустым.",
+      inputSchema: {
+        mode: z.enum(["overview", "setups", "entry"]),
+        expected_symbols: z
+          .array(z.enum(TRADE_SYMBOLS))
+          .optional()
+          .describe("Только для entry: сохранённые кандидаты предыдущей карточки setups."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      _meta: {
+        ui: { visibility: ["model", "app"] },
+        "openai/widgetAccessible": true,
+      },
+    },
+    async ({ mode, expected_symbols = [] }, extra) => {
+      const { token, payload } = createRunToken({
+        mode,
+        expectedSymbols: expected_symbols,
+        session: sessionId(extra),
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Свежий запуск SWISSER создан. Передай run_token в scanner, snapshot и финальный renderer; не заменяй его токеном другого запуска.",
+          },
+        ],
+        structuredContent: {
+          run_token: token,
+          run_id: payload.run_id,
+          mode: payload.mode,
+          expected_symbols: payload.expected_symbols,
+          expires_at_unix: Math.floor(payload.exp / 1000),
+        },
+      };
+    },
+  );
+
   server.registerTool(
     "scan_swisser_markets",
     {
       title: "Сканировать рынок SWISSER",
       description:
-        "Получает компактный актуальный scanner по TAO, HYPE, SOL, XRP, DOGE и ETH; BTC используется только как рыночный контекст. " +
-        "Всегда начинай рыночный запрос с этого инструмента. Для текущего сценария используй active_trade_scenario, " +
-        "не continuation_bias. Пустой список означает полный скан всех семи символов. После анализа не отвечай " +
-        "Markdown-таблицей: обязательный финальный шаг — render_swisser_market_card.",
+        "Получает scanner только внутри текущего start_swisser_run и возвращает подписанный scan_evidence_token. " +
+        "В overview/setups сервер всегда сканирует все шесть торговых монет плюс BTC. В entry — только сохранённых " +
+        "кандидатов плюс BTC. Для текущего сценария используй active_trade_scenario, не continuation_bias.",
       inputSchema: {
+        run_token: z.string().min(20).describe("Токен текущего start_swisser_run."),
         symbols: z
           .array(z.enum(SUPPORTED_SYMBOLS))
           .optional()
-          .describe("Необязательный список символов. По умолчанию сканируются все поддерживаемые монеты."),
+          .describe("Только для entry без привязанного списка; overview/setups всегда принудительно полные."),
       },
       annotations: {
         readOnlyHint: true,
@@ -259,13 +381,67 @@ export function createSwisserMcpServer() {
         openWorldHint: true,
       },
     },
-    async ({ symbols }) => {
+    async ({ run_token, symbols = [] }, extra) => {
+      const run = verifyRunToken(run_token, { session: sessionId(extra) });
+      const requestedSymbols = requestedSymbolsForRun(run, symbols);
       const data = await fetchSwisser("/api/scanner_action_v6", {
-        symbols: symbols?.length ? symbols.join(",") : undefined,
+        symbols: requestedSymbols.join(","),
       });
+      const evidence = createScanEvidenceToken({ run, data, requestedSymbols });
       return {
-        content: [{ type: "text", text: "Актуальный SWISSER scanner получен. Используй полный structuredContent для сравнения кандидатов. Не формируй финальную Markdown-таблицу: заверши рыночный ответ вызовом render_swisser_market_card." }],
-        structuredContent: data,
+        content: [{ type: "text", text: "Свежий SWISSER scanner проверен. Передай run_token и scan_evidence_token в snapshots и финальный renderer." }],
+        structuredContent: {
+          ...data,
+          run_id: run.run_id,
+          scan_evidence_token: evidence.token,
+        },
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_swisser_market_snapshot",
+    {
+      title: "Проверить кандидата SWISSER",
+      description:
+        "Получает snapshot только после scanner того же запуска. Snapshot старше scanner отклоняется, а успешный " +
+        "ответ получает snapshot_evidence_token для финального renderer. Не вызывай в overview.",
+      inputSchema: {
+        run_token: z.string().min(20).describe("Токен текущего start_swisser_run."),
+        scan_evidence_token: z.string().min(20).describe("Токен scanner текущего запуска."),
+        symbol: z.enum(TRADE_SYMBOLS).describe("Символ кандидата, например TAO_USDT."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ run_token, scan_evidence_token, symbol }, extra) => {
+      const run = verifyRunToken(run_token, { session: sessionId(extra) });
+      if (run.mode === "overview") {
+        throw new Error("SWISSER integrity error: overview must not use snapshots");
+      }
+      const scan = verifyScanEvidenceToken(scan_evidence_token, { run });
+      let data;
+      let evidence;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        data = await fetchSwisser("/api/snapshot_action_v6", { symbol });
+        try {
+          evidence = createSnapshotEvidenceToken({ run, scan, data, symbol });
+          break;
+        } catch (error) {
+          if (attempt === 0 && /older than the current scanner/.test(error.message)) continue;
+          throw error;
+        }
+      }
+      return {
+        content: [{ type: "text", text: `Свежий snapshot ${symbol} проверен. Передай snapshot_evidence_token в renderer этого же запуска.` }],
+        structuredContent: {
+          ...data,
+          run_id: run.run_id,
+          snapshot_evidence_token: evidence.token,
+        },
       };
     },
   );
@@ -274,63 +450,54 @@ export function createSwisserMcpServer() {
     server,
     "render_swisser_market_card",
     {
-      title: "Показать карточку рынка SWISSER",
+      title: "Показать проверенную карточку рынка SWISSER",
       description:
-        "Финально отображает неизменяемую компактную карточку SWISSER после анализа. " +
-        "Это обязательный финальный инструмент, а не необязательное украшение. Вызывай ровно один раз в конце " +
-        "каждого завершённого рыночного анализа в режимах overview, setups и entry. В overview передавай все шесть монет " +
-        "в фиксированном порядке без приоритета и оставляй candidates пустым. В setups передавай все шесть монет и любое " +
-        "число действительно сильных кандидатов; равноценным монетам назначай одинаковый priority. В entry в market_rows " +
-        "передавай проверенный набор из последнего результата setups со статусом каждого, а в candidates — только ещё " +
-        "действующие сценарии; новые монеты не добавляй. Не показывай RR. " +
-        "Карточка сама добавляет три команды под итогом, чтобы к ним не приходилось прокручивать чат.",
+        "Финальный renderer с жёсткой проверкой происхождения данных. Требует run_token и scan_evidence_token одного " +
+        "текущего запуска; каждый торговый кандидат в setups и каждая строка entry требуют свежий snapshot token. " +
+        "Цена, 4h/1h/15m/1m, активная идея, BTC и время карточки строятся сервером из evidence и не принимаются " +
+        "от модели. В overview — шесть монет без кандидатов; в setups — шесть монет и любое число реальных " +
+        "кандидатов; в entry — только сохранённый набор. Не показывай RR.",
       inputSchema: {
         mode: z
           .enum(["overview", "setups", "entry", "quick", "trades", "day"])
-          .describe("Используй overview, setups или entry; quick/trades/day сохранены только для старых клиентов."),
-        cut_time: z.string().min(1).max(40).describe("Время среза с пометкой МСК."),
-        btc_price: z.string().min(1).max(32).describe("Отформатированная цена BTC."),
-        btc_structure: z.object({
-          h4: z.enum(["Bull", "Bear", "Wait", "—"]),
-          h1: z.enum(["Bull", "Bear", "Wait", "—"]),
-          m15: z.enum(["Bull", "Bear", "Wait", "—"]),
-          m1: z.enum(["Bull", "Bear", "Wait", "—"]),
-        }),
+          .describe("Используй overview, setups или entry; старые aliases сохранены для совместимости."),
+        run_token: z.string().min(20),
+        scan_evidence_token: z.string().min(20),
+        snapshot_evidence_tokens: z.array(z.string().min(20)).max(6),
         lead: z.string().min(1).max(180).describe("Один главный вывод над таблицей."),
         market_rows: z
           .array(
             z.object({
               symbol: z.enum(["TAO", "HYPE", "SOL", "XRP", "DOGE", "ETH"]),
-              price: z.string().min(1).max(32),
-              idea: z.enum(["Long", "Short", "Local Long", "Local Short", "Wait", "—"]),
-              h4: z.enum(["Bull", "Bear", "Wait", "—"]),
-              h1: z.enum(["Bull", "Bear", "Wait", "—"]),
-              m15: z.enum(["Bull", "Bear", "Wait", "—"]),
-              m1: z.enum(["Bull", "Bear", "Wait", "—"]),
               priority: z
                 .enum(["top", "secondary", "watch", "none"])
                 .optional()
-                .describe("В overview и entry — none. В setups одинаково сильные монеты получают одинаковый tier."),
+                .describe("Только аналитический tier в setups; structural fields добавит сервер."),
               note: z.string().min(1).max(260),
             }),
           )
           .min(1)
           .max(6)
-          .describe("В overview/setups — все шесть монет; в entry — только кандидаты из последнего setups."),
+          .describe("В overview/setups — все шесть; в entry — ровно сохранённый набор."),
         candidates: z
           .array(
-            z.object({
-              symbol: z.enum(["TAO", "HYPE", "SOL", "XRP", "DOGE", "ETH"]),
-              direction: z.enum(["Long", "Short", "Local Long", "Local Short"]),
-              entry_condition: z.string().min(1).max(320),
-              entry: z.string().min(1).max(80),
-              stop_or_invalidation: z.string().min(1).max(120),
-              targets: z.array(z.string().min(1).max(40)).min(1).max(3),
-              pnl_6x: z.array(z.string().min(1).max(32)).min(1).max(3),
-            }),
+            z
+              .object({
+                symbol: z.enum(["TAO", "HYPE", "SOL", "XRP", "DOGE", "ETH"]),
+                direction: z.enum(["Long", "Short", "Local Long", "Local Short"]),
+                entry_condition: z.string().min(1).max(320),
+                entry: z.string().min(1).max(80),
+                stop_or_invalidation: z.string().min(1).max(120),
+                targets: z.array(z.string().min(1).max(40)).min(1).max(3),
+                pnl_6x: z.array(z.string().min(1).max(32)).min(1).max(3),
+              })
+              .refine((candidate) => candidate.targets.length === candidate.pnl_6x.length, {
+                message: "Каждая цель должна иметь ровно одно соответствующее значение PnL 6x",
+                path: ["pnl_6x"],
+              }),
           )
           .max(6)
-          .describe("Пусто для overview; в setups — все сильные кандидаты без лимита и заполнителей; в entry — только неотменённые сценарии из сохранённого набора."),
+          .describe("Пусто для overview; каждый кандидат требует snapshot token текущего запуска."),
         conclusion: z.string().min(1).max(420),
       },
       annotations: {
@@ -341,50 +508,33 @@ export function createSwisserMcpServer() {
       _meta: {
         ui: { resourceUri: MARKET_CARD_URI },
         "openai/outputTemplate": MARKET_CARD_URI,
-        "openai/toolInvocation/invoking": "Оформляю сводку SWISSER",
-        "openai/toolInvocation/invoked": "Сводка SWISSER готова",
+        "openai/toolInvocation/invoking": "Проверяю свежесть и оформляю SWISSER",
+        "openai/toolInvocation/invoked": "Проверенная сводка SWISSER готова",
       },
     },
-    async (card) => ({
-      content: [
-        {
-          type: "text",
-          text: "Карточка SWISSER отображена. Не повторяй её содержимое большой Markdown-таблицей; при необходимости добавь только одну короткую оговорку.",
-        },
-      ],
-      structuredContent: {
-        ...card,
-        commands: COMMANDS.map((prompt, index) => ({
-          id: index + 1,
-          label: COMMAND_LABELS[index],
-          prompt,
-        })),
-      },
-    }),
-  );
-
-  server.registerTool(
-    "get_swisser_market_snapshot",
-    {
-      title: "Проверить кандидата SWISSER",
-      description:
-        "Получает подробный актуальный snapshot одной монеты после первичного scanner. " +
-        "Используй для подтверждения структуры, входа, отмены, целей и потенциального PnL выбранного кандидата. " +
-        "Не вызывай в режиме «Обзор рынка».",
-      inputSchema: {
-        symbol: z.enum(SUPPORTED_SYMBOLS).describe("Символ кандидата, например TAO_USDT."),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: true,
-      },
-    },
-    async ({ symbol }) => {
-      const data = await fetchSwisser("/api/snapshot_action_v6", { symbol });
+    async (input, extra) => {
+      const card = buildVerifiedCard({
+        runToken: input.run_token,
+        scanEvidenceToken: input.scan_evidence_token,
+        snapshotEvidenceTokens: input.snapshot_evidence_tokens,
+        mode: canonicalMode(input.mode),
+        lead: input.lead,
+        marketRows: input.market_rows,
+        candidates: input.candidates,
+        conclusion: input.conclusion,
+        session: sessionId(extra),
+      });
       return {
-        content: [{ type: "text", text: `Подробный SWISSER snapshot ${symbol} получен. Используй полный structuredContent и заверши рыночный ответ вызовом render_swisser_market_card вместо Markdown-таблицы.` }],
-        structuredContent: data,
+        content: [
+          {
+            type: "text",
+            text: "Карточка SWISSER построена только из проверенного evidence текущего запуска. Не дублируй её большой Markdown-таблицей.",
+          },
+        ],
+        structuredContent: {
+          ...card,
+          commands: commandPayloads(card),
+        },
       };
     },
   );
@@ -420,7 +570,13 @@ export function createSwisserMcpServer() {
       ],
       structuredContent: {
         title: "SWISSER · Рынок",
-        commands: COMMANDS.map((prompt, index) => ({ id: index + 1, prompt })),
+        commands: COMMANDS.map((prompt, index) => ({
+          id: index + 1,
+          label: COMMAND_LABELS[index],
+          prompt,
+          mode: ["overview", "setups", "entry"][index],
+          expected_symbols: [],
+        })),
       },
     }),
   );
