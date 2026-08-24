@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BTC_SYMBOL,
+  EVIDENCE_TTL_MS,
   RUN_TTL_MS,
   TRADE_SYMBOLS,
   buildVerifiedCard,
@@ -171,6 +172,10 @@ test("a run expires and non-entry modes cannot bind candidate symbols", () => {
   );
   const run = makeRun("overview");
   const scan = makeScan(run, [...TRADE_SYMBOLS, BTC_SYMBOL]);
+  assert.equal(
+    verifyRunToken(run.token, { now: NOW + 180_001 }).mode,
+    "overview",
+  );
   assert.throws(
     () =>
       buildVerifiedCard({
@@ -185,6 +190,65 @@ test("a run expires and non-entry modes cannot bind candidate symbols", () => {
       }),
     /token expired/,
   );
+});
+
+test("market evidence expires independently from the longer workflow envelope", () => {
+  const run = makeRun("setups");
+  const scan = makeScan(run, [...TRADE_SYMBOLS, BTC_SYMBOL]);
+  const snapshot = makeSnapshot(run, scan, "SOL_USDT");
+  assert.equal(scan.payload.exp, NOW + 1_000 + EVIDENCE_TTL_MS);
+  assert.equal(snapshot.payload.exp, scan.payload.exp);
+  assert.ok(run.payload.exp > scan.payload.exp);
+
+  assert.throws(
+    () =>
+      buildVerifiedCard({
+        runToken: run.token,
+        scanEvidenceToken: scan.token,
+        snapshotEvidenceTokens: [snapshot.token],
+        mode: "setups",
+        lead: "Просроченный рынок",
+        marketRows: rows(),
+        candidates: [candidate()],
+        conclusion: "Просрочено",
+        now: scan.payload.exp + 1,
+      }),
+    /evidence token expired/,
+  );
+});
+
+test("ChatGPT queue delay does not consume the market evidence window", () => {
+  const run = makeRun("setups");
+  const delayedScanMs = NOW + 240_000;
+  const verifiedRun = verifyRunToken(run.token, { now: delayedScanMs });
+  const scan = createScanEvidenceToken({
+    run: verifiedRun,
+    data: scanData([...TRADE_SYMBOLS, BTC_SYMBOL], delayedScanMs),
+    requestedSymbols: [...TRADE_SYMBOLS, BTC_SYMBOL],
+    now: delayedScanMs + 100,
+  });
+  const snapshot = createSnapshotEvidenceToken({
+    run: verifiedRun,
+    scan: scan.payload,
+    data: snapshotData("SOL_USDT", delayedScanMs + 30_000),
+    symbol: "SOL_USDT",
+    now: delayedScanMs + 30_100,
+  });
+
+  const card = buildVerifiedCard({
+    runToken: run.token,
+    scanEvidenceToken: scan.token,
+    snapshotEvidenceTokens: [snapshot.token],
+    mode: "setups",
+    lead: "Задержка очереди пережита",
+    marketRows: rows(),
+    candidates: [candidate()],
+    conclusion: "Срез остаётся свежим",
+    now: delayedScanMs + 60_000,
+  });
+
+  assert.equal(card.source_integrity.verified, true);
+  assert.equal(scan.payload.exp, delayedScanMs + EVIDENCE_TTL_MS);
 });
 
 test("a session-bound run cannot be reused by another ChatGPT session", () => {
