@@ -88,7 +88,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.9.0");
+  assert.equal(initialized.result.serverInfo.version, "1.9.1");
   assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
   assert.match(initialized.result.instructions, /короткий workflow_id/);
   assert.match(initialized.result.instructions, /Никогда не передавай evidence_token/);
@@ -100,6 +100,8 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   );
   assert.match(initialized.result.instructions, /«3» — entry/);
   assert.match(initialized.result.instructions, /последнего результата «Лучшие сетапы»/);
+  assert.match(initialized.result.instructions, /само по себе не означает «опоздал»/);
+  assert.match(initialized.result.instructions, /не требует нового CHoCH/);
   assert.match(initialized.result.instructions, /исходный срез и исходный рейтинг/);
   assert.match(initialized.result.instructions, /движение после среза, а не PnL сделки/);
 
@@ -112,7 +114,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   ]);
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.9.0.html",
+    "ui://swisser/market-controls/1.9.1.html",
   );
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
@@ -151,7 +153,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.9.0.html",
+    uri: "ui://swisser/market-controls/1.9.1.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -172,10 +174,14 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.match(COMMANDS[0], /не ранжируй их/);
   assert.match(COMMANDS[1], /без заранее заданного количества/);
   assert.match(COMMANDS[2], /только по кандидатам из последнего результата «Лучшие сетапы»/);
-  assert.match(COMMANDS[2], /свежий значимый LuxAlgo internal CHoCH/);
+  assert.match(COMMANDS[2], /направление действующей структуры и свежесть конкретного входного триггера/);
+  assert.match(COMMANDS[2], /BOS, продолжающий ту же CHoCH-цепочку/);
+  assert.match(COMMANDS[2], /само по себе не означает «опоздал»/);
+  assert.match(COMMANDS[2], /не требует нового CHoCH/);
   assert.match(COMMANDS[2], /отсутствие не является veto/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.9.1.html",
     "ui://swisser/market-controls/1.9.0.html",
     "ui://swisser/market-controls/1.8.0.html",
     "ui://swisser/market-controls/1.7.3.html",
