@@ -21,7 +21,13 @@ function hierarchy(direction = "BULLISH") {
     setup_timeframe_bias: { direction },
     entry_timeframe_bias: { direction },
     continuation_bias: { direction: trade },
-    active_trade_scenario: { direction: trade, label: trade },
+    active_trade_scenario: {
+      direction: trade,
+      label: trade,
+      kind: "CORE_CONTINUATION",
+      status: "READY",
+      trade_ready: true,
+    },
     trade_direction_preference: { direction: trade },
   };
 }
@@ -71,6 +77,7 @@ function candidate(symbol = "SOL", overrides = {}) {
   return {
     symbol,
     direction: "Long",
+    status: "confirmed",
     entry_condition: "После свежего 1m CHoCH",
     entry: "после триггера",
     stop_or_invalidation: "ниже локального low",
@@ -324,6 +331,155 @@ test("renderer validates target/PnL pairs and candidate direction", () => {
     }),
     /direction conflicts with current evidence/,
   );
+});
+
+test("trade_ready is a confirmation gate, not an automatic entry decision", () => {
+  const scan = makeScan({ mode: "setups" });
+  const bundle = makeBundle(scan, ["SOL_USDT", "HYPE_USDT", "TAO_USDT"]);
+  const card = buildVerifiedCard({
+    workflow: bundle,
+    mode: "setups",
+    marketRows: rows(),
+    candidates: [
+      candidate("SOL", { status: "wait" }),
+      candidate("HYPE", { status: "cancelled" }),
+      candidate("TAO", { status: undefined }),
+    ],
+    now: NOW + 3_000,
+  });
+
+  assert.equal(bundle.snapshots.SOL_USDT.summary.trade_ready, true);
+  assert.equal(card.candidates[0].entry_status, "wait");
+  assert.equal(card.candidates[1].entry_status, "cancelled");
+  assert.equal(card.candidates[2].entry_status, "wait");
+  assert.equal(card.conclusion, "ЖДАТЬ: SOL, TAO; ОТМЕНА: HYPE.");
+});
+
+test("entry cancels a saved direction when the active scenario has flipped", () => {
+  const scan = makeScan({
+    mode: "entry",
+    expectedSymbols: ["SOL_USDT"],
+  });
+  const bundle = makeBundle(scan, ["SOL_USDT"]);
+  const card = buildVerifiedCard({
+    workflow: bundle,
+    mode: "entry",
+    marketRows: rows(["SOL_USDT"]),
+    candidates: [candidate("SOL", { direction: "Short", status: "confirmed" })],
+    now: NOW + 3_000,
+  });
+
+  assert.equal(card.market_rows[0].idea, "Long");
+  assert.equal(card.candidates[0].entry_status, "cancelled");
+  assert.match(card.candidates[0].entry_condition, /противоположно сохранённому Short/);
+  assert.equal(card.conclusion, "ОТМЕНА: SOL.");
+});
+
+test("renderer keeps every mode consistent with a Bear/Bull/Bear DOGE snapshot", () => {
+  const falseNarrative = "ВХОД ПОДТВЕРЖДЁН: все таймфреймы bearish";
+  const dogeWait = (summary) => ({
+    ...summary,
+    h4: "Bear",
+    h1: "Bear",
+    m15: "Bull",
+    m1: "Bear",
+    idea: "Wait",
+    active_direction: null,
+    trade_ready: false,
+    scenario_kind: "CONFLICT",
+    scenario_status: "WAIT",
+    allowed_directions: [],
+  });
+
+  const overview = makeScan({ mode: "overview", directions: { DOGE_USDT: "BEARISH" } });
+  overview.scan.summaries.DOGE_USDT = dogeWait(overview.scan.summaries.DOGE_USDT);
+  const overviewCard = buildVerifiedCard({
+    workflow: overview,
+    mode: "overview",
+    lead: falseNarrative,
+    marketRows: rows().map((row) => ({ ...row, note: falseNarrative })),
+    conclusion: falseNarrative,
+    now: NOW + 3_000,
+  });
+  const overviewDoge = overviewCard.market_rows.find((row) => row.symbol === "DOGE");
+  assert.equal(overviewDoge.m15, "Bull");
+  assert.equal(overviewDoge.idea, "Wait");
+  assert.match(overviewDoge.note, /1h\/15m\/1m: Bear\/Bull\/Bear/);
+  assert.doesNotMatch(overviewDoge.note, /все таймфреймы bearish/i);
+
+  const setups = makeScan({ mode: "setups", directions: { DOGE_USDT: "BEARISH" } });
+  const setupsBundle = makeBundle(setups, ["DOGE_USDT"], {
+    directions: { DOGE_USDT: "BEARISH" },
+  });
+  setupsBundle.snapshots.DOGE_USDT.summary = dogeWait(
+    setupsBundle.snapshots.DOGE_USDT.summary,
+  );
+  const setupsCard = buildVerifiedCard({
+    workflow: setupsBundle,
+    mode: "setups",
+    lead: falseNarrative,
+    marketRows: rows().map((row) => ({ ...row, note: falseNarrative })),
+    candidates: [candidate("DOGE", {
+      direction: "Short",
+      entry_condition: falseNarrative,
+    })],
+    conclusion: falseNarrative,
+    now: NOW + 3_000,
+  });
+  const setupsDoge = setupsCard.market_rows.find((row) => row.symbol === "DOGE");
+  assert.equal(setupsDoge.note.startsWith("ЖДАТЬ."), true);
+  assert.equal(setupsCard.candidates[0].entry_status, "wait");
+  assert.equal(setupsCard.candidates[0].status_label, "ЖДАТЬ");
+  assert.match(setupsCard.candidates[0].entry_condition, /ядро конфликтует/);
+  assert.doesNotMatch(setupsCard.candidates[0].entry_condition, /все таймфреймы bearish/i);
+  assert.equal(setupsCard.conclusion, "ЖДАТЬ: DOGE.");
+
+  const entry = makeScan({
+    mode: "entry",
+    expectedSymbols: ["DOGE_USDT"],
+    directions: { DOGE_USDT: "BEARISH" },
+  });
+  const entryBundle = makeBundle(entry, ["DOGE_USDT"], {
+    directions: { DOGE_USDT: "BEARISH" },
+  });
+  entryBundle.snapshots.DOGE_USDT.summary = dogeWait(entryBundle.snapshots.DOGE_USDT.summary);
+  const entryCard = buildVerifiedCard({
+    workflow: entryBundle,
+    mode: "entry",
+    lead: falseNarrative,
+    marketRows: rows(["DOGE_USDT"]).map((row) => ({ ...row, note: falseNarrative })),
+    candidates: [candidate("DOGE", {
+      direction: "Short",
+      entry_condition: falseNarrative,
+    })],
+    conclusion: falseNarrative,
+    now: NOW + 3_000,
+  });
+  assert.equal(entryCard.market_rows[0].idea, "Wait");
+  assert.equal(entryCard.market_rows[0].m15, "Bull");
+  assert.equal(entryCard.candidates[0].entry_status, "wait");
+  assert.equal(entryCard.lead, "Кандидаты: DOGE.");
+  assert.equal(entryCard.conclusion, "ЖДАТЬ: DOGE.");
+});
+
+test("recovered renderer never carries old levels into a new market cut", () => {
+  const scan = makeScan({ mode: "setups" });
+  const bundle = makeBundle(scan, ["SOL_USDT"]);
+  const card = buildVerifiedCard({
+    workflow: bundle,
+    mode: "setups",
+    marketRows: rows(),
+    candidates: [candidate("SOL")],
+    stateRecovered: true,
+    now: NOW + 3_000,
+  });
+
+  assert.equal(card.source_integrity.state_recovered, true);
+  assert.equal(card.market_rows[2].priority, "none");
+  assert.equal(card.candidates[0].entry_status, "confirmed");
+  assert.equal(card.candidates[0].entry, "—");
+  assert.deepEqual(card.candidates[0].targets, []);
+  assert.match(card.lead, /прежние уровни и рейтинг не переносились/);
 });
 
 test("entry bundle atomically requires every saved candidate and forbids additions", () => {

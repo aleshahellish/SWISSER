@@ -43,7 +43,13 @@ function hierarchy(direction = "BULLISH") {
     setup_timeframe_bias: { direction },
     entry_timeframe_bias: { direction },
     continuation_bias: { direction: trade },
-    active_trade_scenario: { direction: trade, label: trade },
+    active_trade_scenario: {
+      direction: trade,
+      label: trade,
+      kind: "CORE_CONTINUATION",
+      status: "READY",
+      trade_ready: true,
+    },
     trade_direction_preference: { direction: trade },
   };
 }
@@ -88,7 +94,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.9.1");
+  assert.equal(initialized.result.serverInfo.version, "1.9.2");
   assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
   assert.match(initialized.result.instructions, /короткий workflow_id/);
   assert.match(initialized.result.instructions, /Никогда не передавай evidence_token/);
@@ -114,11 +120,11 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   ]);
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.9.1.html",
+    "ui://swisser/market-controls/1.9.2.html",
   );
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v7.html",
+    "ui://swisser/market-card-v8.html",
   );
   const scannerProperties = tools.result.tools[0].inputSchema.properties;
   assert.ok(scannerProperties.mode);
@@ -139,9 +145,13 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.equal(rendererProperties.scan_evidence_token, undefined);
   assert.equal(rendererProperties.snapshot_evidence_tokens, undefined);
   const rowProperties = rendererProperties.market_rows.items.properties;
-  for (const forbidden of ["price", "idea", "h4", "h1", "m15", "m1"]) {
+  for (const forbidden of ["price", "idea", "h4", "h1", "m15", "m1", "note"]) {
     assert.equal(rowProperties[forbidden], undefined);
   }
+  assert.equal(rendererProperties.lead, undefined);
+  assert.equal(rendererProperties.conclusion, undefined);
+  assert.equal(rendererProperties.candidates.items.properties.entry_condition, undefined);
+  assert.ok(rendererProperties.candidates.items.properties.status);
 
   const controlsCall = await rpc(url, 3, "tools/call", {
     name: "open_swisser_controls",
@@ -153,7 +163,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.9.1.html",
+    uri: "ui://swisser/market-controls/1.9.2.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -173,14 +183,17 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.deepEqual(COMMAND_LABELS, ["Обзор рынка", "Лучшие сетапы", "Проверить вход"]);
   assert.match(COMMANDS[0], /не ранжируй их/);
   assert.match(COMMANDS[1], /без заранее заданного количества/);
+  assert.match(COMMANDS[1], /необходимое, но не достаточное условие confirmed/);
   assert.match(COMMANDS[2], /только по кандидатам из последнего результата «Лучшие сетапы»/);
   assert.match(COMMANDS[2], /направление действующей структуры и свежесть конкретного входного триггера/);
   assert.match(COMMANDS[2], /BOS, продолжающий ту же CHoCH-цепочку/);
   assert.match(COMMANDS[2], /само по себе не означает «опоздал»/);
   assert.match(COMMANDS[2], /не требует нового CHoCH/);
   assert.match(COMMANDS[2], /отсутствие не является veto/);
+  assert.match(COMMANDS[2], /status=confirmed, wait или cancelled/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.9.2.html",
     "ui://swisser/market-controls/1.9.1.html",
     "ui://swisser/market-controls/1.9.0.html",
     "ui://swisser/market-controls/1.8.0.html",
@@ -198,6 +211,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     "ui://swisser/market-controls-v1.html",
   ];
   const supportedCards = [
+    "ui://swisser/market-card-v8.html",
     "ui://swisser/market-card-v7.html",
     "ui://swisser/market-card-v6.html",
     "ui://swisser/market-card-v5.html",
@@ -292,6 +306,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     candidates: ["SOL", "HYPE"].map((symbol) => ({
       symbol,
       direction: "Long",
+      status: "confirmed",
       entry_condition: "После свежего 1m BOS",
       entry: "после триггера",
       stop_or_invalidation: "ниже локального low",
@@ -309,6 +324,8 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.equal(rendered.result.structuredContent.source_integrity.state_recovered, false);
   assert.equal(rendered.result.structuredContent.market_rows[0].price, "100.00");
   assert.equal(rendered.result.structuredContent.market_rows[0].h1, "Bull");
+  assert.equal(rendered.result.structuredContent.candidates[0].entry_status, "confirmed");
+  assert.equal(rendered.result.structuredContent.candidates[0].status_label, "ВХОД ПОДТВЕРЖДЁН");
   assert.deepEqual(
     rendered.result.structuredContent.commands[2].expected_symbols,
     ["SOL_USDT", "HYPE_USDT"],
@@ -319,7 +336,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   );
 
   const cardResource = await rpc(url, 9, "resources/read", {
-    uri: "ui://swisser/market-card-v7.html",
+    uri: "ui://swisser/market-card-v8.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Потенц\. PnL 6x/);
@@ -329,6 +346,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.match(cardHtml, /notifyIntrinsicHeight/);
   assert.match(cardHtml, /ResizeObserver/);
   assert.match(cardHtml, /Italianno/);
+  assert.match(cardHtml, /entry-status/);
   assert.doesNotMatch(cardHtml, /overflow-x:\s*auto/);
   assert.doesNotMatch(cardHtml, />RR</);
   assert.doesNotMatch(cardHtml, /innerHTML/);
@@ -387,6 +405,8 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   });
   assert.equal(entryCard.result.structuredContent.market_rows.length, 2);
   assert.equal(entryCard.result.structuredContent.source_integrity.state_recovered, true);
+  assert.equal(entryCard.result.structuredContent.candidates[0].entry, "—");
+  assert.deepEqual(entryCard.result.structuredContent.candidates[0].targets, []);
   assert.deepEqual(
     [...entryCard.result.structuredContent.commands[2].expected_symbols].sort(),
     ["HYPE_USDT", "SOL_USDT"],

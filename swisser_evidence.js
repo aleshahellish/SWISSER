@@ -139,6 +139,12 @@ function summarizeMarketItem(item) {
 
   const active = hierarchy.active_trade_scenario || {};
   const continuation = hierarchy.continuation_bias || {};
+  const activeDirection = tradeDirection(active.direction);
+  const pendingDirection = tradeDirection(
+    active.potential_local_direction ||
+    active.potential_continuation_direction ||
+    continuation.direction,
+  );
   const allowedDirections = new Set();
   for (const value of [
     active.label,
@@ -162,6 +168,11 @@ function summarizeMarketItem(item) {
     m15: cardSignal(hierarchy.setup_timeframe_bias?.direction),
     m1: cardSignal(hierarchy.entry_timeframe_bias?.direction),
     idea: cardIdea(active.label || active.direction),
+    active_direction: activeDirection,
+    pending_direction: pendingDirection,
+    trade_ready: active.trade_ready === true,
+    scenario_kind: active.kind || null,
+    scenario_status: active.status || null,
     allowed_directions: [...allowedDirections],
   };
 }
@@ -362,6 +373,127 @@ function directionFamily(value) {
   return String(value || "").toLowerCase().includes("short") ? "Short" : "Long";
 }
 
+function guardedEntryStatus(summary, candidateDirection, requestedStatus = "wait") {
+  const family = directionFamily(candidateDirection);
+  if (summary.active_direction && summary.active_direction !== family) {
+    return "cancelled";
+  }
+  if (requestedStatus === "cancelled") return "cancelled";
+  if (
+    requestedStatus === "confirmed" &&
+    summary.trade_ready === true &&
+    summary.active_direction === family
+  ) {
+    return "confirmed";
+  }
+  return "wait";
+}
+
+function entryStatusLabel(status) {
+  if (status === "confirmed") return "ВХОД ПОДТВЕРЖДЁН";
+  if (status === "cancelled") return "ОТМЕНА";
+  return "ЖДАТЬ";
+}
+
+function coreStack(summary) {
+  return `1h/15m/1m: ${summary.h1}/${summary.m15}/${summary.m1}`;
+}
+
+function scenarioDescription(summary) {
+  if (summary.scenario_kind === "CORE_CONTINUATION") return "ядро согласовано";
+  if (summary.scenario_kind === "PULLBACK_IN_PROGRESS") {
+    return `идёт 1m-откат; ожидаемое продолжение ${summary.pending_direction || "не определено"}`;
+  }
+  if (summary.scenario_kind === "LOCAL_COUNTER_1H") {
+    return `${summary.active_direction || "локальный сценарий"} против 1h`;
+  }
+  if (summary.scenario_kind === "LOCAL_COUNTER_1H_WAITING_CONFIRMATION") {
+    return `${summary.pending_direction || "локальный сценарий"} против 1h ещё не подтверждён`;
+  }
+  if (summary.scenario_kind === "INSUFFICIENT_DATA") return "недостаточно структурных данных";
+  return "ядро конфликтует";
+}
+
+function authoritativeStatusReason(summary, status, candidateDirection) {
+  const family = directionFamily(candidateDirection);
+  if (status === "confirmed") {
+    return `${coreStack(summary)}; сервер подтвердил активный ${family} и свежий 1m CHoCH/BOS.`;
+  }
+  if (status === "cancelled") {
+    return `${coreStack(summary)}; активное направление ${summary.active_direction} противоположно сохранённому ${family}.`;
+  }
+  if (summary.scenario_kind === "PULLBACK_IN_PROGRESS") {
+    return `${coreStack(summary)}; 1m-откат не завершён, нужен свежий ${summary.pending_direction || family} CHoCH/BOS.`;
+  }
+  if (summary.scenario_kind === "LOCAL_COUNTER_1H_WAITING_CONFIRMATION") {
+    return `${coreStack(summary)}; локальный ${summary.pending_direction || family} против 1h ещё не получил свежий 1m CHoCH/BOS.`;
+  }
+  if (!summary.active_direction || summary.idea === "Wait") {
+    return `${coreStack(summary)}; ядро конфликтует, поэтому вход не подтверждён.`;
+  }
+  return `${coreStack(summary)}; сценарий ${summary.active_direction} сохраняется, но trade_ready=false.`;
+}
+
+function authoritativeMarketNote(summary, status, candidateDirection, hasCandidate) {
+  if (!hasCandidate) {
+    const idea = summary.idea === "—" ? "не определена" : summary.idea;
+    const readiness = summary.trade_ready
+      ? "структурный 1m-фильтр пройден"
+      : "структурный 1m-фильтр не пройден";
+    return `${coreStack(summary)}; ${scenarioDescription(summary)}; активная идея: ${idea}; ${readiness}.`;
+  }
+  return `${entryStatusLabel(status)}. ${authoritativeStatusReason(summary, status, candidateDirection)}`;
+}
+
+function groupedStatuses(candidates) {
+  const groups = { confirmed: [], wait: [], cancelled: [] };
+  for (const candidate of candidates) {
+    groups[candidate.entry_status].push(shortSymbol(fullSymbol(candidate.symbol)));
+  }
+  return groups;
+}
+
+function authoritativeCardSummary(mode, rows, candidates, stateRecovered) {
+  if (mode === "overview") {
+    const byIdea = { Long: [], Short: [], Wait: [], Other: [] };
+    for (const row of rows) {
+      const bucket = row.idea.includes("Long")
+        ? byIdea.Long
+        : row.idea.includes("Short")
+        ? byIdea.Short
+        : row.idea === "Wait"
+        ? byIdea.Wait
+        : byIdea.Other;
+      bucket.push(row.symbol);
+    }
+    const parts = [];
+    if (byIdea.Long.length) parts.push(`Long: ${byIdea.Long.join(", ")}`);
+    if (byIdea.Short.length) parts.push(`Short: ${byIdea.Short.join(", ")}`);
+    if (byIdea.Wait.length) parts.push(`Wait: ${byIdea.Wait.join(", ")}`);
+    if (byIdea.Other.length) parts.push(`Без идеи: ${byIdea.Other.join(", ")}`);
+    return {
+      lead: "Нейтральный серверный срез без ранжирования.",
+      conclusion: parts.join("; ") + ".",
+    };
+  }
+
+  const groups = groupedStatuses(candidates);
+  const prefix = stateRecovered
+    ? "Срез восстановлен сервером; прежние уровни и рейтинг не переносились. "
+    : "";
+  const lead = candidates.length
+    ? `${prefix}Кандидаты: ${candidates.map((item) => item.symbol).join(", ")}.`
+    : `${prefix}Конкурентных кандидатов сейчас нет.`;
+  const parts = [];
+  if (groups.confirmed.length) parts.push(`ВХОД ПОДТВЕРЖДЁН: ${groups.confirmed.join(", ")}`);
+  if (groups.wait.length) parts.push(`ЖДАТЬ: ${groups.wait.join(", ")}`);
+  if (groups.cancelled.length) parts.push(`ОТМЕНА: ${groups.cancelled.join(", ")}`);
+  return {
+    lead,
+    conclusion: parts.length ? parts.join("; ") + "." : "Подтверждённых входов сейчас нет.",
+  };
+}
+
 export function buildVerifiedCard({
   workflow: suppliedWorkflow,
   mode,
@@ -369,6 +501,7 @@ export function buildVerifiedCard({
   marketRows,
   candidates = [],
   conclusion,
+  stateRecovered = false,
   session = null,
   now = Date.now(),
   protocol = "server-state-v3",
@@ -417,25 +550,8 @@ export function buildVerifiedCard({
   const inputRowsBySymbol = new Map(
     inputRows.map((row) => [fullSymbol(row.symbol), row]),
   );
-  const orderedSymbols = canonical === "overview" ? TRADE_SYMBOLS : rowSymbols;
-  const verifiedRows = orderedSymbols.map((symbol) => {
-    const input = inputRowsBySymbol.get(symbol);
-    const summary = snapshots[symbol]?.summary || workflow.scan.summaries[symbol];
-    if (!summary) fail(`no current evidence for ${symbol}`);
-    return {
-      symbol: shortSymbol(symbol),
-      price: formatPrice(summary.price),
-      idea: summary.idea,
-      h4: summary.h4,
-      h1: summary.h1,
-      m15: summary.m15,
-      m1: summary.m1,
-      priority: canonical === "setups" ? input.priority || "none" : "none",
-      note: input.note,
-    };
-  });
-
   const candidateSymbols = new Set();
+  const verifiedCandidates = [];
   for (const candidate of candidates) {
     const symbol = fullSymbol(candidate.symbol);
     if (candidateSymbols.has(symbol)) fail(`duplicate candidate ${symbol}`);
@@ -447,10 +563,67 @@ export function buildVerifiedCard({
     }
     const allowed = snapshots[symbol].summary.allowed_directions || [];
     const family = directionFamily(candidate.direction);
-    if (allowed.length && !allowed.includes(family)) {
+    if (canonical !== "entry" && allowed.length && !allowed.includes(family)) {
       fail(`candidate ${symbol} direction conflicts with current evidence`);
     }
+    const summary = snapshots[symbol].summary;
+    const status = guardedEntryStatus(
+      summary,
+      candidate.direction,
+      candidate.status || "wait",
+    );
+    const reason = authoritativeStatusReason(summary, status, candidate.direction);
+    verifiedCandidates.push({
+      ...candidate,
+      entry_status: status,
+      status_label: entryStatusLabel(status),
+      entry_condition: reason,
+      entry: stateRecovered ? "—" : candidate.entry,
+      stop_or_invalidation: stateRecovered
+        ? "уровни прежнего среза не перенесены"
+        : candidate.stop_or_invalidation,
+      targets: stateRecovered ? [] : candidate.targets,
+      pnl_6x: stateRecovered ? [] : candidate.pnl_6x,
+    });
   }
+
+  const candidatesBySymbol = new Map(
+    verifiedCandidates.map((candidate) => [fullSymbol(candidate.symbol), candidate]),
+  );
+  const orderedSymbols = canonical === "overview" ? TRADE_SYMBOLS : rowSymbols;
+  const verifiedRows = orderedSymbols.map((symbol) => {
+    const input = inputRowsBySymbol.get(symbol);
+    const summary = snapshots[symbol]?.summary || workflow.scan.summaries[symbol];
+    if (!summary) fail(`no current evidence for ${symbol}`);
+    const candidate = candidatesBySymbol.get(symbol);
+    const fallbackDirection = summary.active_direction || "Long";
+    const status = candidate?.entry_status || "wait";
+    return {
+      symbol: shortSymbol(symbol),
+      price: formatPrice(summary.price),
+      idea: summary.idea,
+      h4: summary.h4,
+      h1: summary.h1,
+      m15: summary.m15,
+      m1: summary.m1,
+      priority: canonical === "setups" && !stateRecovered
+        ? input.priority || "none"
+        : "none",
+      note: authoritativeMarketNote(
+        summary,
+        status,
+        candidate?.direction || fallbackDirection,
+        Boolean(candidate),
+      ),
+    };
+  });
+
+  const authoritative = authoritativeCardSummary(
+    canonical,
+    verifiedRows,
+    verifiedCandidates,
+    stateRecovered,
+  );
 
   const btc = workflow.scan.summaries[BTC_SYMBOL];
   if (!btc) fail("current scanner has no BTC context");
@@ -459,13 +632,14 @@ export function buildVerifiedCard({
     cut_time: cutTime(workflow),
     btc_price: formatPrice(btc.price),
     btc_structure: { h4: btc.h4, h1: btc.h1, m15: btc.m15, m1: btc.m1 },
-    lead,
+    lead: authoritative.lead,
     market_rows: verifiedRows,
-    candidates,
-    conclusion,
+    candidates: verifiedCandidates,
+    conclusion: authoritative.conclusion,
     source_integrity: {
       verified: true,
       protocol,
+      state_recovered: stateRecovered,
       run_id: workflow.run_id,
       scan_fetched_at_unix: Math.round(workflow.scan.source_ms / 1000),
       snapshot_fetched_at_unix: Object.fromEntries(
