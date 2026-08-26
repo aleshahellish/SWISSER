@@ -1,5 +1,6 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v7.html";
+export const MARKET_CARD_URI = "ui://swisser/market-card-v8.html";
 export const LEGACY_MARKET_CARD_URIS = [
+  "ui://swisser/market-card-v7.html",
   "ui://swisser/market-card-v6.html",
   "ui://swisser/market-card-v5.html",
   "ui://swisser/market-card-v4.html",
@@ -93,6 +94,10 @@ export const marketCardHtml = String.raw`<!doctype html>
     .candidates th:nth-child(4) { width: 16%; }
     .candidates th:nth-child(5) { width: 17%; }
     .candidate-name { white-space: nowrap; }
+    .entry-status { display: block; margin-bottom: 2px; font-size: .92em; font-weight: 700; }
+    .entry-status.confirmed { color: var(--bull); }
+    .entry-status.wait { color: var(--wait); }
+    .entry-status.cancelled { color: var(--bear); }
     .targets, .pnl {
       white-space: normal;
       overflow-wrap: normal;
@@ -311,7 +316,15 @@ export const marketCardHtml = String.raw`<!doctype html>
         name.append(document.createTextNode(row.symbol + " "));
         appendSignal(name, row.direction);
         tr.appendChild(name);
-        appendText(tr, "td", row.entry_condition);
+        const condition = document.createElement("td");
+        appendText(
+          condition,
+          "span",
+          row.status_label,
+          "entry-status " + (row.entry_status || "wait"),
+        );
+        appendText(condition, "div", row.entry_condition);
+        tr.appendChild(condition);
         appendText(tr, "td", row.entry + " / " + row.stop_or_invalidation);
         appendText(tr, "td", row.targets.join(" → "), "targets");
         appendText(tr, "td", row.pnl_6x.join(" · "), "pnl");
