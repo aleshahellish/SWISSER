@@ -351,6 +351,8 @@ test("trade_ready is a confirmation gate, not an automatic entry decision", () =
   assert.equal(card.candidates[0].entry_status, "wait");
   assert.equal(card.candidates[1].entry_status, "cancelled");
   assert.equal(card.candidates[2].entry_status, "wait");
+  assert.match(card.candidates[0].entry_condition, /структурный 1m-фильтр пройден/);
+  assert.doesNotMatch(JSON.stringify(card), /trade_ready=(?:true|false)/);
   assert.equal(card.conclusion, "ЖДАТЬ: SOL, TAO; ОТМЕНА: HYPE.");
 });
 
