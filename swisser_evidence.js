@@ -431,7 +431,10 @@ function authoritativeStatusReason(summary, status, candidateDirection) {
   if (!summary.active_direction || summary.idea === "Wait") {
     return `${coreStack(summary)}; ядро конфликтует, поэтому вход не подтверждён.`;
   }
-  return `${coreStack(summary)}; сценарий ${summary.active_direction} сохраняется, но trade_ready=false.`;
+  if (summary.trade_ready === true) {
+    return `${coreStack(summary)}; структурный 1m-фильтр пройден, но итоговая проверка места, пространства и стопа оставила статус ЖДАТЬ.`;
+  }
+  return `${coreStack(summary)}; сценарий ${summary.active_direction} сохраняется, но свежий входной триггер пока не подтверждён.`;
 }
 
 function authoritativeMarketNote(summary, status, candidateDirection, hasCandidate) {
