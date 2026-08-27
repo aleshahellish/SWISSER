@@ -94,7 +94,7 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.10.0");
+  assert.equal(initialized.result.serverInfo.version, "1.10.1");
   assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
   assert.match(initialized.result.instructions, /короткий workflow_id/);
   assert.match(initialized.result.instructions, /Никогда не передавай evidence_token/);
@@ -126,7 +126,7 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
   );
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v9.html",
+    "ui://swisser/market-card-v10.html",
   );
   const scannerProperties = tools.result.tools[0].inputSchema.properties;
   assert.ok(scannerProperties.mode);
@@ -214,6 +214,7 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
     "ui://swisser/market-controls-v1.html",
   ];
   const supportedCards = [
+    "ui://swisser/market-card-v10.html",
     "ui://swisser/market-card-v9.html",
     "ui://swisser/market-card-v8.html",
     "ui://swisser/market-card-v7.html",
@@ -339,7 +340,7 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
   );
 
   const cardResource = await rpc(url, 9, "resources/read", {
-    uri: "ui://swisser/market-card-v9.html",
+    uri: "ui://swisser/market-card-v10.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Потенц\. PnL 6x/);
@@ -350,6 +351,24 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
   assert.match(cardHtml, /ResizeObserver/);
   assert.match(cardHtml, /Italianno/);
   assert.match(cardHtml, /entry-status/);
+  assert.match(cardHtml, /\["ETH", "SOL", "HYPE", "TAO", "DOGE", "XRP"\]/);
+  assert.match(cardHtml, /\["top", "secondary", "watch"\]/);
+  const marketRowsBuilder = cardHtml.match(
+    /function buildMarketRows\(rows\) \{([\s\S]*?)\n    \}/,
+  )?.[1];
+  assert.ok(marketRowsBuilder);
+  assert.match(marketRowsBuilder, /symbolPosition\(left\.symbol\)/);
+  assert.match(marketRowsBuilder, /appendText\(tr, "td", row\.symbol, "coin"\)/);
+  assert.doesNotMatch(marketRowsBuilder, /priorityClass/);
+  const candidatesBuilder = cardHtml.match(
+    /function buildCandidates\(rows, marketRows\) \{([\s\S]*?)\n    \}/,
+  )?.[1];
+  assert.ok(candidatesBuilder);
+  assert.match(candidatesBuilder, /priorityPosition\(priorities\.get\(left\.symbol\)\)/);
+  assert.match(candidatesBuilder, /row\.entry_status === "confirmed"/);
+  assert.match(candidatesBuilder, /showTradePlan \? row\.entry/);
+  assert.match(candidatesBuilder, /showTradePlan \? row\.targets\.join/);
+  assert.match(candidatesBuilder, /showTradePlan \? row\.pnl_6x\.join/);
   assert.doesNotMatch(cardHtml, /overflow-x:\s*auto/);
   assert.doesNotMatch(cardHtml, />RR</);
   assert.doesNotMatch(cardHtml, /innerHTML/);

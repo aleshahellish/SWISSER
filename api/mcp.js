@@ -26,7 +26,7 @@ import {
   saveWorkflowState,
 } from "../swisser_workflow_store.js";
 
-const SERVER_VERSION = "1.10.0";
+const SERVER_VERSION = "1.10.1";
 const CONTROLS_URI = "ui://swisser/market-controls/1.10.0.html";
 const LEGACY_CONTROLS_URIS = [
   "ui://swisser/market-controls/1.9.2.html",
