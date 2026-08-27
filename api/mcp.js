@@ -26,9 +26,10 @@ import {
   saveWorkflowState,
 } from "../swisser_workflow_store.js";
 
-const SERVER_VERSION = "1.9.2";
-const CONTROLS_URI = "ui://swisser/market-controls/1.9.2.html";
+const SERVER_VERSION = "1.10.0";
+const CONTROLS_URI = "ui://swisser/market-controls/1.10.0.html";
 const LEGACY_CONTROLS_URIS = [
+  "ui://swisser/market-controls/1.9.2.html",
   "ui://swisser/market-controls/1.9.1.html",
   "ui://swisser/market-controls/1.9.0.html",
   "ui://swisser/market-controls/1.8.0.html",
@@ -50,8 +51,8 @@ const API_BASE = process.env.SWISSER_API_BASE ?? "https://tao-mexc-live.vercel.a
 
 export const COMMANDS = [
   "Собери нейтральный обзор рынка без выбора лучших. Вызови scan_swisser_markets с mode=overview: scanner сам создаст свежий серверный запуск и вернёт короткий workflow_id. BTC оставь только рыночным контекстом. Покажи фактическое состояние всех шести торговых монет, не ранжируй их и не формируй торговых кандидатов. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме overview; передай workflow_id, если он доступен. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Найди лучшие сетапы на всём рынке. Вызови scan_swisser_markets с mode=setups: scanner сам создаст свежий серверный запуск. Выбери действительно конкурентных кандидатов без заранее заданного количества. Затем одним вызовом get_swisser_candidate_snapshots передай mode=setups, короткий workflow_id, если он доступен, и весь массив выбранных symbols. Отдельно оцени качество сетапа и готовность входа; каждому кандидату передай status=confirmed, wait или cancelled. trade_ready=true — необходимое, но не достаточное условие confirmed: отдельно проверь место, пространство, стоп и инвалидацию. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме setups с последним workflow_id, если он доступен. Если ID потерян или искажён, сервер сам соберёт новый свежий срез. Если кандидатов нет, snapshots не вызывай. Не создавай Markdown-таблицу или PNG вместо renderer.",
-  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Вызови scan_swisser_markets с mode=entry и expected_symbols из сохранённого набора; scanner сам создаст свежий серверный запуск. Не добавляй остальные монеты и не формируй новый рейтинг. Затем одним вызовом get_swisser_candidate_snapshots передай mode=entry, короткий workflow_id, если он доступен, и весь сохранённый набор symbols. На 1m разделяй направление действующей структуры и свежесть конкретного входного триггера. Для строгого статуса ВХОД ПОДТВЕРЖДЁН последнее значимое событие ожидаемого направления должно быть свежим по API: это может быть CHoCH либо BOS, продолжающий ту же CHoCH-цепочку. bars_since > freshness_rule_bars само по себе не означает «опоздал», не отменяет сетап и не требует нового CHoCH. Новый CHoCH нужен только если 1m успел перейти в противоположную структуру; в продолжающейся цепочке свежий BOS может вернуть готовность. Называй вход опоздавшим только при фактическом растяжении цены, ухудшении стопа или сокращении пространства до цели. Если структурный триггер не свежий, оцени положение цены, displacement и завершённость отката/ретеста и дай ЖДАТЬ как «вход пока не подтверждён», а не как автоматическую отмену или доказанное опоздание. C2/C3 используй только как дополнительный контекст: их наличие не обязательно, а отсутствие не является veto. Проверь также место, пространство, стоп и инвалидацию; каждому кандидату передай status=confirmed, wait или cancelled. trade_ready=true — необходимый, но не достаточный фильтр для confirmed. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме entry с последним workflow_id, если он доступен. Если ID потерян или искажён, сервер сам соберёт новый свежий срез. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Найди лучшие сетапы на всём рынке. Вызови scan_swisser_markets с mode=setups: scanner сам создаст свежий серверный запуск. Выбери действительно конкурентных кандидатов без заранее заданного количества. Затем одним вызовом get_swisser_candidate_snapshots передай mode=setups, полученный workflow_id и весь массив выбранных symbols. Отдельно оцени качество сетапа и готовность входа; каждому кандидату передай status=confirmed, wait или cancelled. trade_ready=true — необходимое, но не достаточное условие confirmed: отдельно проверь место, пространство, стоп и инвалидацию. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме setups с workflow_id из snapshot-пакета. Если инструмент вернул SWISSER_RESTART_REQUIRED, один раз начни весь этот режим заново со scanner и не используй прежний shortlist. Если кандидатов нет, snapshots не вызывай и передай renderer ID scanner. Не создавай Markdown-таблицу или PNG вместо renderer.",
+  "Проверь входы только по кандидатам из последнего результата «Лучшие сетапы» в этом диалоге, исключая уже отменённые. Вызови scan_swisser_markets с mode=entry и expected_symbols из сохранённого набора; scanner сам создаст свежий серверный запуск. Не добавляй остальные монеты и не формируй новый рейтинг. Затем одним вызовом get_swisser_candidate_snapshots передай mode=entry, полученный workflow_id и весь сохранённый набор symbols. На 1m разделяй направление действующей структуры и свежесть конкретного входного триггера. Для строгого статуса ВХОД ПОДТВЕРЖДЁН последнее значимое событие ожидаемого направления должно быть свежим по API: это может быть CHoCH либо BOS, продолжающий ту же CHoCH-цепочку. bars_since > freshness_rule_bars само по себе не означает «опоздал», не отменяет сетап и не требует нового CHoCH. Новый CHoCH нужен только если 1m успел перейти в противоположную структуру; в продолжающейся цепочке свежий BOS может вернуть готовность. Называй вход опоздавшим только при фактическом растяжении цены, ухудшении стопа или сокращении пространства до цели. Если структурный триггер не свежий, оцени положение цены, displacement и завершённость отката/ретеста и дай ЖДАТЬ как «вход пока не подтверждён», а не как автоматическую отмену или доказанное опоздание. C2/C3 используй только как дополнительный контекст: их наличие не обязательно, а отсутствие не является veto. Проверь также место, пространство, стоп и инвалидацию; каждому кандидату передай status=confirmed, wait или cancelled. trade_ready=true — необходимый, но не достаточный фильтр для confirmed. ОБЯЗАТЕЛЬНЫЙ финальный шаг — сразу вызови render_swisser_market_card в режиме entry с workflow_id из snapshot-пакета. Если инструмент вернул SWISSER_RESTART_REQUIRED, один раз начни весь этот режим заново со scanner и не используй прежние данные. Если предыдущего списка нет, попроси сначала запустить «Лучшие сетапы». Не создавай Markdown-таблицу или PNG вместо renderer.",
 ];
 
 export const COMMAND_LABELS = [
@@ -579,45 +580,6 @@ async function createFreshScan({ mode, expectedSymbols = [], session = null }) {
   return { data, workflow };
 }
 
-async function createFreshBundle({
-  mode,
-  expectedSymbols = [],
-  symbols,
-  session = null,
-}) {
-  const canonical = canonicalMode(mode);
-  const requestedSymbols = requestedSymbolsForMode(canonical, expectedSymbols);
-  // Scanner and initial snapshots are independent live reads. Starting them
-  // together keeps a cold-state recovery within one Vercel invocation.
-  const [data, initialSnapshots] = await Promise.all([
-    fetchSwisser("/api/scanner_action_v6", {
-      symbols: requestedSymbols.join(","),
-    }),
-    fetchSnapshotMap(symbols),
-  ]);
-  const scan = createScanWorkflowState({
-    mode: canonical,
-    expectedSymbols,
-    session,
-    data,
-    requestedSymbols,
-  });
-  const dataBySymbol = new Map();
-  for (const symbol of symbols) {
-    let snapshot = initialSnapshots.get(symbol);
-    if (Number(snapshot?.fetched_at_unix) * 1000 < scan.scan.source_ms) {
-      snapshot = await fetchFreshSnapshot(symbol, scan.scan.source_ms);
-    }
-    dataBySymbol.set(symbol, snapshot);
-  }
-  const workflow = createSnapshotBundleState({
-    workflow: scan,
-    dataBySymbol,
-    symbols,
-  });
-  return { data, dataBySymbol, workflow };
-}
-
 function requiredSnapshotsForCard(mode, marketRows, candidates) {
   if (mode === "overview") return [];
   if (mode === "entry") return marketRows.map((row) => fullSymbol(row.symbol));
@@ -644,45 +606,40 @@ function storedWorkflowMatches(workflow, { mode, expectedSymbols, requiredSnapsh
   return requiredSnapshots.every((symbol) => availableSnapshots.includes(symbol));
 }
 
+function workflowRestartRequired(stage) {
+  throw new Error(
+    `SWISSER_RESTART_REQUIRED: ${stage} не получил состояние текущего запуска. ` +
+    "Один раз повтори весь режим с scan_swisser_markets; не используй прежний shortlist, snapshots или уровни.",
+  );
+}
+
 async function workflowForSnapshots({ workflowId, mode, symbols, session }) {
   const canonical = canonicalMode(mode);
   const expectedSymbols = canonical === "entry" ? symbols : [];
-  let workflow = loadWorkflowState(workflowId, {
+  let workflow = await loadWorkflowState(workflowId, {
     mode: canonical,
     stage: "scan",
     session,
   });
-  let recovered = false;
-  let dataBySymbol;
-
-  if (storedWorkflowMatches(workflow, {
+  if (!storedWorkflowMatches(workflow, {
     mode: canonical,
     expectedSymbols,
     requiredSnapshots: [],
   })) {
-    dataBySymbol = await fetchSnapshotMap(symbols, workflow.scan.source_ms);
-    workflow = createSnapshotBundleState({
-      workflow,
-      dataBySymbol,
-      symbols,
-    });
-  } else {
-    recovered = true;
-    const fresh = await createFreshBundle({
-      mode: canonical,
-      expectedSymbols,
-      symbols,
-      session,
-    });
-    workflow = fresh.workflow;
-    dataBySymbol = fresh.dataBySymbol;
+    workflowRestartRequired("snapshot");
   }
+
+  const dataBySymbol = await fetchSnapshotMap(symbols, workflow.scan.source_ms);
+  workflow = createSnapshotBundleState({
+    workflow,
+    dataBySymbol,
+    symbols,
+  });
 
   return {
     workflow,
-    workflowId: saveWorkflowState(workflow),
+    workflowId: await saveWorkflowState(workflow),
     dataBySymbol,
-    recovered,
   };
 }
 
@@ -696,35 +653,27 @@ async function workflowForRenderer({ input, session }) {
     input.candidates,
   );
   const requiredStage = requiredSnapshots.length ? "bundle" : "scan";
-  let workflow = loadWorkflowState(input.workflow_id, {
+  let workflow = await loadWorkflowState(input.workflow_id, {
     mode: canonical,
     stage: requiredStage,
     session,
   });
-  let recovered = false;
 
   if (!storedWorkflowMatches(workflow, {
     mode: canonical,
     expectedSymbols,
     requiredSnapshots,
   })) {
-    recovered = true;
-    workflow = requiredSnapshots.length
-      ? (await createFreshBundle({
-        mode: canonical,
-        expectedSymbols,
-        symbols: requiredSnapshots,
-        session,
-      })).workflow
-      : (await createFreshScan({
+    if (canonical !== "overview") workflowRestartRequired("renderer");
+    workflow = (await createFreshScan({
         mode: canonical,
         expectedSymbols,
         session,
       })).workflow;
-    saveWorkflowState(workflow);
+    await saveWorkflowState(workflow);
   }
 
-  return { workflow, recovered };
+  return workflow;
 }
 
 function commandPayloads(card) {
@@ -758,12 +707,14 @@ export function createSwisserMcpServer() {
     instructions:
       "ОБЯЗАТЕЛЬНО: каждый рыночный запуск SWISSER начинай одним scan_swisser_markets с нужным mode; scanner сам " +
       "создаёт новый свежий серверный запуск и возвращает короткий workflow_id. Для setups и entry получай все нужные " +
-      "snapshots одним get_swisser_candidate_snapshots, передавая mode, symbols и workflow_id, если он доступен. Затем " +
-      "сразу вызывай render_swisser_market_card с последним workflow_id, если он доступен. Никогда не передавай " +
-      "evidence_token: полных подписанных токенов в текущем протоколе нет. Потерянный, искажённый или отсутствующий " +
-      "workflow_id не является причиной повторять вызовы вручную: инструмент сам восстановит один свежий market cut. " +
+      "snapshots одним get_swisser_candidate_snapshots, обязательно передавая mode, symbols и workflow_id scanner. Затем " +
+      "сразу вызывай render_swisser_market_card с workflow_id последнего этапа. Никогда не передавай " +
+      "evidence_token: полных подписанных токенов в текущем протоколе нет. Если snapshot или renderer вернул " +
+      "SWISSER_RESTART_REQUIRED, один раз повтори весь текущий режим со scanner и не смешивай данные двух запусков. " +
+      "Для setups/entry частично восстановленная карточка запрещена: либо полный единый цикл, либо понятная ошибка без итога. " +
       "Структура, цены и " +
       "время среза в карточке являются серверными полями: не передавай и не подменяй их вручную. " +
+      "Не выводи пользователю workflow_id, verified, state_recovered и другие служебные поля. " +
       "Обычная Markdown-таблица, список или PNG не заменяют renderer. После вызова не дублируй карточку текстом. " +
       "Точный запрос «1» означает режим overview («Обзор рынка»), «2» — setups («Лучшие сетапы»), " +
       "«3» — entry («Проверить вход»); не проси расшифровку цифры. SWISSER анализирует MEXC Futures в трёх последовательных режимах. " +
@@ -803,9 +754,9 @@ export function createSwisserMcpServer() {
     {
       title: "Сканировать рынок SWISSER",
       description:
-        "Сам создаёт один свежий серверный запуск и возвращает короткий необязательный workflow_id. В overview/setups " +
+        "Сам создаёт один свежий серверный запуск и возвращает короткий workflow_id. В overview/setups " +
         "сервер всегда сканирует все шесть торговых монет плюс BTC. В entry передай ровно сохранённых кандидатов " +
-        "последней карточки setups. Если ID потеряется, следующий инструмент сам соберёт новый свежий срез. " +
+        "последней карточки setups. Передай полученный ID следующему инструменту без изменений. " +
         "Для текущего сценария используй active_trade_scenario, не continuation_bias.",
       inputSchema: {
         mode: z.enum(["overview", "setups", "entry"]),
@@ -828,14 +779,14 @@ export function createSwisserMcpServer() {
         expectedSymbols: expected_symbols,
         session: sessionId(extra),
       });
-      const workflowId = saveWorkflowState(workflow);
+      const workflowId = await saveWorkflowState(workflow);
       return {
         content: [{
           type: "text",
           text:
             canonical === "overview"
-              ? "Свежий обзорный scanner проверен. Сразу вызови renderer; workflow_id можно передать для ускорения."
-              : "Свежий scanner проверен. Выбери кандидатов и одним вызовом получи пакет snapshots; workflow_id можно передать для ускорения.",
+              ? "Свежий обзорный scanner проверен. Сразу вызови renderer с этим workflow_id."
+              : "Свежий scanner проверен. Выбери кандидатов и одним вызовом получи пакет snapshots с этим workflow_id.",
         }],
         structuredContent: {
           workflow_id: workflowId,
@@ -851,15 +802,15 @@ export function createSwisserMcpServer() {
       title: "Проверить кандидатов SWISSER одним пакетом",
       description:
         "После scanner получает все выбранные snapshots одним вызовом и возвращает новый короткий workflow_id. " +
-        "Если ID отсутствует, потерян или искажён, сервер сам создаёт новый свежий scanner и продолжает без " +
-        "использования старых данных. Для entry symbols должны точно совпасть с сохранённым набором. Не вызывай в overview.",
+        "Требует ID именно текущего scanner; при его отсутствии не смешивает данные, а требует полный перезапуск режима. " +
+        "Для entry symbols должны точно совпасть с сохранённым набором. Не вызывай в overview.",
       inputSchema: {
         mode: z.enum(["setups", "entry"]),
         workflow_id: z
           .string()
+          .uuid()
           .max(80)
-          .optional()
-          .describe("Короткий ID scanner для ускорения; отсутствие или ошибка автоматически восстанавливаются."),
+          .describe("Обязательный короткий ID текущего scanner."),
         symbols: z
           .array(z.enum(TRADE_SYMBOLS))
           .min(1)
@@ -884,9 +835,7 @@ export function createSwisserMcpServer() {
       return {
         content: [{
           type: "text",
-          text: result.recovered
-            ? "Единый пакет snapshots построен из автоматически восстановленного свежего среза. Сразу вызови renderer."
-            : "Единый пакет snapshots проверен. Сразу вызови renderer; новый workflow_id можно передать для ускорения.",
+          text: "Единый пакет snapshots проверен. Сразу вызови renderer с новым workflow_id.",
         }],
         structuredContent: {
           workflow_id: result.workflowId,
@@ -903,8 +852,9 @@ export function createSwisserMcpServer() {
     {
       title: "Показать проверенную карточку рынка SWISSER",
       description:
-        "Финальный renderer с жёсткой проверкой свежести. Принимает необязательный короткий workflow_id. Если ID " +
-        "потерян, искажён или относится не к этому режиму, renderer сам получает новый свежий scanner и нужные snapshots. " +
+        "Финальный renderer с жёсткой проверкой свежести. Для setups/entry требует workflow_id последнего этапа; " +
+        "при несовпадении не строит частичную карточку, а требует один полный перезапуск режима. Overview можно безопасно " +
+        "пересобрать целиком без аналитического рейтинга. " +
         "Цена, 4h/1h/15m/1m, активная идея, сводка, BTC и время карточки строятся сервером. Модель передаёт " +
         "аналитический статус кандидата, но сервер запрещает подтверждение при trade_ready=false, WAIT или противоположном " +
         "активном направлении. В overview — шесть монет без кандидатов; в setups — шесть монет и любое число реальных " +
@@ -915,9 +865,10 @@ export function createSwisserMcpServer() {
           .describe("Используй overview, setups или entry; старые aliases сохранены для совместимости."),
         workflow_id: z
           .string()
+          .uuid()
           .max(80)
           .optional()
-          .describe("Короткий ID последнего этапа; отсутствие или ошибка автоматически восстанавливаются."),
+          .describe("ID последнего этапа; обязателен для setups/entry."),
         market_rows: z
           .array(
             z.object({
@@ -971,20 +922,18 @@ export function createSwisserMcpServer() {
       },
     },
     async (input, extra) => {
-      const state = await workflowForRenderer({
+      const workflow = await workflowForRenderer({
         input,
         session: sessionId(extra),
       });
       const card = buildVerifiedCard({
-        workflow: state.workflow,
+        workflow,
         mode: canonicalMode(input.mode),
         lead: input.lead,
         marketRows: input.market_rows,
         candidates: input.candidates,
         conclusion: input.conclusion,
-        stateRecovered: state.recovered,
         session: sessionId(extra),
-        protocol: "server-state-v3",
       });
       return {
         content: [

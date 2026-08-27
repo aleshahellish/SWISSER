@@ -138,8 +138,7 @@ test("overview card takes price, structure and cut time only from server workflo
     now: NOW + 3_000,
   });
 
-  assert.equal(card.source_integrity.verified, true);
-  assert.equal(card.source_integrity.protocol, "server-state-v3");
+  assert.equal("source_integrity" in card, false);
   assert.equal(card.market_rows[0].price, "100.00");
   assert.equal(card.market_rows[0].h1, "Bull");
   assert.notEqual(card.market_rows[0].price, "999999");
@@ -462,7 +461,7 @@ test("renderer keeps every mode consistent with a Bear/Bull/Bear DOGE snapshot",
   assert.equal(entryCard.conclusion, "ЖДАТЬ: DOGE.");
 });
 
-test("recovered renderer never carries old levels into a new market cut", () => {
+test("verified cards do not expose internal recovery or integrity flags", () => {
   const scan = makeScan({ mode: "setups" });
   const bundle = makeBundle(scan, ["SOL_USDT"]);
   const card = buildVerifiedCard({
@@ -470,16 +469,16 @@ test("recovered renderer never carries old levels into a new market cut", () => 
     mode: "setups",
     marketRows: rows(),
     candidates: [candidate("SOL")],
-    stateRecovered: true,
     now: NOW + 3_000,
   });
 
-  assert.equal(card.source_integrity.state_recovered, true);
+  assert.equal("source_integrity" in card, false);
+  assert.equal("state_recovered" in card, false);
   assert.equal(card.market_rows[2].priority, "none");
   assert.equal(card.candidates[0].entry_status, "confirmed");
-  assert.equal(card.candidates[0].entry, "—");
-  assert.deepEqual(card.candidates[0].targets, []);
-  assert.match(card.lead, /прежние уровни и рейтинг не переносились/);
+  assert.equal(card.candidates[0].entry, "после триггера");
+  assert.deepEqual(card.candidates[0].targets, ["TP1", "TP2"]);
+  assert.doesNotMatch(card.lead, /восстановлен|recovered/i);
 });
 
 test("entry bundle atomically requires every saved candidate and forbids additions", () => {

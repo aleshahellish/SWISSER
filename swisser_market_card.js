@@ -1,5 +1,6 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v8.html";
+export const MARKET_CARD_URI = "ui://swisser/market-card-v9.html";
 export const LEGACY_MARKET_CARD_URIS = [
+  "ui://swisser/market-card-v8.html",
   "ui://swisser/market-card-v7.html",
   "ui://swisser/market-card-v6.html",
   "ui://swisser/market-card-v5.html",
