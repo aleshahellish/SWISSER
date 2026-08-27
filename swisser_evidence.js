@@ -453,7 +453,7 @@ function groupedStatuses(candidates) {
   return groups;
 }
 
-function authoritativeCardSummary(mode, rows, candidates, stateRecovered) {
+function authoritativeCardSummary(mode, rows, candidates) {
   if (mode === "overview") {
     const byIdea = { Long: [], Short: [], Wait: [], Other: [] };
     for (const row of rows) {
@@ -478,12 +478,9 @@ function authoritativeCardSummary(mode, rows, candidates, stateRecovered) {
   }
 
   const groups = groupedStatuses(candidates);
-  const prefix = stateRecovered
-    ? "Срез восстановлен сервером; прежние уровни и рейтинг не переносились. "
-    : "";
   const lead = candidates.length
-    ? `${prefix}Кандидаты: ${candidates.map((item) => item.symbol).join(", ")}.`
-    : `${prefix}Конкурентных кандидатов сейчас нет.`;
+    ? `Кандидаты: ${candidates.map((item) => item.symbol).join(", ")}.`
+    : "Конкурентных кандидатов сейчас нет.";
   const parts = [];
   if (groups.confirmed.length) parts.push(`ВХОД ПОДТВЕРЖДЁН: ${groups.confirmed.join(", ")}`);
   if (groups.wait.length) parts.push(`ЖДАТЬ: ${groups.wait.join(", ")}`);
@@ -497,14 +494,10 @@ function authoritativeCardSummary(mode, rows, candidates, stateRecovered) {
 export function buildVerifiedCard({
   workflow: suppliedWorkflow,
   mode,
-  lead,
   marketRows,
   candidates = [],
-  conclusion,
-  stateRecovered = false,
   session = null,
   now = Date.now(),
-  protocol = "server-state-v3",
 } = {}) {
   const canonical = canonicalMode(mode);
   const workflow = verifyWorkflowPayload(suppliedWorkflow, {
@@ -578,12 +571,10 @@ export function buildVerifiedCard({
       entry_status: status,
       status_label: entryStatusLabel(status),
       entry_condition: reason,
-      entry: stateRecovered ? "—" : candidate.entry,
-      stop_or_invalidation: stateRecovered
-        ? "уровни прежнего среза не перенесены"
-        : candidate.stop_or_invalidation,
-      targets: stateRecovered ? [] : candidate.targets,
-      pnl_6x: stateRecovered ? [] : candidate.pnl_6x,
+      entry: candidate.entry,
+      stop_or_invalidation: candidate.stop_or_invalidation,
+      targets: candidate.targets,
+      pnl_6x: candidate.pnl_6x,
     });
   }
 
@@ -606,9 +597,7 @@ export function buildVerifiedCard({
       h1: summary.h1,
       m15: summary.m15,
       m1: summary.m1,
-      priority: canonical === "setups" && !stateRecovered
-        ? input.priority || "none"
-        : "none",
+      priority: canonical === "setups" ? input.priority || "none" : "none",
       note: authoritativeMarketNote(
         summary,
         status,
@@ -618,12 +607,7 @@ export function buildVerifiedCard({
     };
   });
 
-  const authoritative = authoritativeCardSummary(
-    canonical,
-    verifiedRows,
-    verifiedCandidates,
-    stateRecovered,
-  );
+  const authoritative = authoritativeCardSummary(canonical, verifiedRows, verifiedCandidates);
 
   const btc = workflow.scan.summaries[BTC_SYMBOL];
   if (!btc) fail("current scanner has no BTC context");
@@ -636,18 +620,5 @@ export function buildVerifiedCard({
     market_rows: verifiedRows,
     candidates: verifiedCandidates,
     conclusion: authoritative.conclusion,
-    source_integrity: {
-      verified: true,
-      protocol,
-      state_recovered: stateRecovered,
-      run_id: workflow.run_id,
-      scan_fetched_at_unix: Math.round(workflow.scan.source_ms / 1000),
-      snapshot_fetched_at_unix: Object.fromEntries(
-        Object.entries(snapshots).map(([symbol, item]) => [
-          symbol,
-          Math.round(item.source_ms / 1000),
-        ]),
-      ),
-    },
   };
 }

@@ -84,7 +84,7 @@ function assertEmbeddedScriptParses(html) {
   assert.doesNotThrow(() => new Function(script));
 }
 
-test("SWISSER MCP exposes self-healing server-state workflow and compatible UI", async (t) => {
+test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) => {
   const { server, url } = await startServer();
   t.after(() => server.close());
 
@@ -94,11 +94,13 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.9.2");
+  assert.equal(initialized.result.serverInfo.version, "1.10.0");
   assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
   assert.match(initialized.result.instructions, /короткий workflow_id/);
   assert.match(initialized.result.instructions, /Никогда не передавай evidence_token/);
-  assert.match(initialized.result.instructions, /сам восстановит один свежий market cut/);
+  assert.match(initialized.result.instructions, /SWISSER_RESTART_REQUIRED/);
+  assert.match(initialized.result.instructions, /частично восстановленная карточка запрещена/);
+  assert.match(initialized.result.instructions, /Не выводи пользователю.*state_recovered/);
   assert.match(initialized.result.instructions, /одним get_swisser_candidate_snapshots/);
   assert.doesNotMatch(
     initialized.result.instructions,
@@ -120,11 +122,11 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   ]);
   assert.equal(
     tools.result.tools[3]._meta["openai/outputTemplate"],
-    "ui://swisser/market-controls/1.9.2.html",
+    "ui://swisser/market-controls/1.10.0.html",
   );
   assert.equal(
     tools.result.tools[2]._meta["openai/outputTemplate"],
-    "ui://swisser/market-card-v8.html",
+    "ui://swisser/market-card-v9.html",
   );
   const scannerProperties = tools.result.tools[0].inputSchema.properties;
   assert.ok(scannerProperties.mode);
@@ -163,7 +165,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   );
 
   const controlsResource = await rpc(url, 4, "resources/read", {
-    uri: "ui://swisser/market-controls/1.9.2.html",
+    uri: "ui://swisser/market-controls/1.10.0.html",
   });
   const controlsHtml = controlsResource.result.contents[0].text;
   for (const command of COMMANDS) {
@@ -193,6 +195,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.match(COMMANDS[2], /status=confirmed, wait или cancelled/);
 
   const supportedControls = [
+    "ui://swisser/market-controls/1.10.0.html",
     "ui://swisser/market-controls/1.9.2.html",
     "ui://swisser/market-controls/1.9.1.html",
     "ui://swisser/market-controls/1.9.0.html",
@@ -211,6 +214,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     "ui://swisser/market-controls-v1.html",
   ];
   const supportedCards = [
+    "ui://swisser/market-card-v9.html",
     "ui://swisser/market-card-v8.html",
     "ui://swisser/market-card-v7.html",
     "ui://swisser/market-card-v6.html",
@@ -319,9 +323,8 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
     name: "render_swisser_market_card",
     arguments: cardInput,
   });
-  assert.equal(rendered.result.structuredContent.source_integrity.verified, true);
-  assert.equal(rendered.result.structuredContent.source_integrity.protocol, "server-state-v3");
-  assert.equal(rendered.result.structuredContent.source_integrity.state_recovered, false);
+  assert.equal("source_integrity" in rendered.result.structuredContent, false);
+  assert.equal("state_recovered" in rendered.result.structuredContent, false);
   assert.equal(rendered.result.structuredContent.market_rows[0].price, "100.00");
   assert.equal(rendered.result.structuredContent.market_rows[0].h1, "Bull");
   assert.equal(rendered.result.structuredContent.candidates[0].entry_status, "confirmed");
@@ -336,7 +339,7 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   );
 
   const cardResource = await rpc(url, 9, "resources/read", {
-    uri: "ui://swisser/market-card-v8.html",
+    uri: "ui://swisser/market-card-v9.html",
   });
   const cardHtml = cardResource.result.contents[0].text;
   assert.match(cardHtml, /Потенц\. PnL 6x/);
@@ -352,28 +355,31 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   assert.doesNotMatch(cardHtml, /innerHTML/);
   assertEmbeddedScriptParses(cardHtml);
 
-  const recoveredBundle = await rpc(url, 10, "tools/call", {
+  const missingSetupsBundle = await rpc(url, 10, "tools/call", {
     name: "get_swisser_candidate_snapshots",
     arguments: {
       mode: "setups",
-      workflow_id: "not-a-valid-workflow-id",
+      workflow_id: "00000000-0000-4000-8000-000000000001",
       symbols: ["SOL_USDT", "HYPE_USDT"],
     },
   });
-  assert.equal(recoveredBundle.result.isError, undefined);
-  assert.equal(recoveredBundle.result.structuredContent.snapshots.length, 2);
-  assert.match(recoveredBundle.result.content[0].text, /автоматически восстановленного свежего среза/);
+  assert.equal(missingSetupsBundle.result.isError, true);
+  assert.match(missingSetupsBundle.result.content[0].text, /SWISSER_RESTART_REQUIRED/);
+  assert.deepEqual(upstreamCalls, [
+    "/api/scanner_action_v6",
+    "/api/snapshot_action_v6",
+    "/api/snapshot_action_v6",
+  ]);
 
-  const recoveredCard = await rpc(url, 11, "tools/call", {
+  const missingSetupsCard = await rpc(url, 11, "tools/call", {
     name: "render_swisser_market_card",
     arguments: {
       ...cardInput,
-      workflow_id: "another-corrupted-id",
+      workflow_id: "00000000-0000-4000-8000-000000000002",
     },
   });
-  assert.equal(recoveredCard.result.isError, undefined);
-  assert.equal(recoveredCard.result.structuredContent.source_integrity.verified, true);
-  assert.equal(recoveredCard.result.structuredContent.source_integrity.state_recovered, true);
+  assert.equal(missingSetupsCard.result.isError, true);
+  assert.match(missingSetupsCard.result.content[0].text, /SWISSER_RESTART_REQUIRED/);
 
   const entryScan = await rpc(url, 12, "tools/call", {
     name: "scan_swisser_markets",
@@ -384,36 +390,74 @@ test("SWISSER MCP exposes self-healing server-state workflow and compatible UI",
   });
   assert.equal(entryScan.result.structuredContent.scan.results.length, 3);
 
-  const recoveredEntryBundle = await rpc(url, 13, "tools/call", {
+  const entryBundle = await rpc(url, 13, "tools/call", {
     name: "get_swisser_candidate_snapshots",
     arguments: {
       mode: "entry",
-      workflow_id: "broken-entry-id",
+      workflow_id: entryScan.result.structuredContent.workflow_id,
       symbols: ["SOL_USDT", "HYPE_USDT"],
     },
   });
-  assert.equal(recoveredEntryBundle.result.structuredContent.snapshots.length, 2);
+  assert.equal(entryBundle.result.structuredContent.snapshots.length, 2);
 
   const entryCard = await rpc(url, 14, "tools/call", {
     name: "render_swisser_market_card",
     arguments: {
       ...cardInput,
       mode: "entry",
-      workflow_id: "broken-entry-renderer-id",
+      workflow_id: entryBundle.result.structuredContent.workflow_id,
       market_rows: cardInput.market_rows.filter((row) => ["SOL", "HYPE"].includes(row.symbol)),
     },
   });
   assert.equal(entryCard.result.structuredContent.market_rows.length, 2);
-  assert.equal(entryCard.result.structuredContent.source_integrity.state_recovered, true);
-  assert.equal(entryCard.result.structuredContent.candidates[0].entry, "—");
-  assert.deepEqual(entryCard.result.structuredContent.candidates[0].targets, []);
+  assert.equal("source_integrity" in entryCard.result.structuredContent, false);
+  assert.equal(entryCard.result.structuredContent.candidates[0].entry, "после триггера");
+  assert.deepEqual(entryCard.result.structuredContent.candidates[0].targets, ["TP1", "TP2"]);
   assert.deepEqual(
     [...entryCard.result.structuredContent.commands[2].expected_symbols].sort(),
     ["HYPE_USDT", "SOL_USDT"],
   );
 
+  const missingEntryBundle = await rpc(url, 15, "tools/call", {
+    name: "get_swisser_candidate_snapshots",
+    arguments: {
+      mode: "entry",
+      workflow_id: "00000000-0000-4000-8000-000000000003",
+      symbols: ["SOL_USDT", "HYPE_USDT"],
+    },
+  });
+  assert.equal(missingEntryBundle.result.isError, true);
+  assert.match(missingEntryBundle.result.content[0].text, /SWISSER_RESTART_REQUIRED/);
+
+  const missingEntryCard = await rpc(url, 16, "tools/call", {
+    name: "render_swisser_market_card",
+    arguments: {
+      ...cardInput,
+      mode: "entry",
+      workflow_id: "00000000-0000-4000-8000-000000000004",
+      market_rows: cardInput.market_rows.filter((row) => ["SOL", "HYPE"].includes(row.symbol)),
+    },
+  });
+  assert.equal(missingEntryCard.result.isError, true);
+  assert.match(missingEntryCard.result.content[0].text, /SWISSER_RESTART_REQUIRED/);
+
+  const rebuiltOverview = await rpc(url, 17, "tools/call", {
+    name: "render_swisser_market_card",
+    arguments: {
+      mode: "overview",
+      workflow_id: "00000000-0000-4000-8000-000000000005",
+      market_rows: TRADE_SYMBOLS.map((symbol) => ({
+        symbol: symbol.replace("_USDT", ""),
+        priority: "none",
+      })),
+      candidates: [],
+    },
+  });
+  assert.equal(rebuiltOverview.result.structuredContent.market_rows.length, 6);
+  assert.equal("source_integrity" in rebuiltOverview.result.structuredContent, false);
+
   for (const [index, uri] of [...supportedControls.slice(1), ...supportedCards.slice(1)].entries()) {
-    const compatible = await rpc(url, 20 + index, "resources/read", { uri });
+    const compatible = await rpc(url, 30 + index, "resources/read", { uri });
     assert.equal(compatible.result.contents[0].uri, uri);
     assert.equal(compatible.result.contents[0].mimeType, "text/html;profile=mcp-app");
   }
