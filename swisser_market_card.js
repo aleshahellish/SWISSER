@@ -1,5 +1,6 @@
-export const MARKET_CARD_URI = "ui://swisser/market-card-v9.html";
+export const MARKET_CARD_URI = "ui://swisser/market-card-v10.html";
 export const LEGACY_MARKET_CARD_URIS = [
+  "ui://swisser/market-card-v9.html",
   "ui://swisser/market-card-v8.html",
   "ui://swisser/market-card-v7.html",
   "ui://swisser/market-card-v6.html",
@@ -227,6 +228,14 @@ export const marketCardHtml = String.raw`<!doctype html>
     let heightFrame;
     let heightObserver;
     let lastReportedHeight = 0;
+    const symbolOrder = new Map(
+      ["ETH", "SOL", "HYPE", "TAO", "DOGE", "XRP"]
+        .map((symbol, index) => [symbol, index]),
+    );
+    const priorityOrder = new Map(
+      ["top", "secondary", "watch"]
+        .map((priority, index) => [priority, index]),
+    );
 
     function reportIntrinsicHeight() {
       cancelAnimationFrame(heightFrame);
@@ -269,6 +278,14 @@ export const marketCardHtml = String.raw`<!doctype html>
       return "";
     }
 
+    function symbolPosition(value) {
+      return symbolOrder.get(value) ?? symbolOrder.size;
+    }
+
+    function priorityPosition(value) {
+      return priorityOrder.get(value) ?? priorityOrder.size;
+    }
+
     function buildContext(data) {
       contextNode.replaceChildren();
       contextNode.append(document.createTextNode("Срез: " + data.cut_time + " · BTC " + data.btc_price + " · 4h "));
@@ -283,10 +300,12 @@ export const marketCardHtml = String.raw`<!doctype html>
 
     function buildMarketRows(rows) {
       marketRowsNode.replaceChildren();
-      rows.forEach((row) => {
+      const orderedRows = [...rows].sort(
+        (left, right) => symbolPosition(left.symbol) - symbolPosition(right.symbol),
+      );
+      orderedRows.forEach((row) => {
         const tr = document.createElement("tr");
-        const coinCell = appendText(tr, "td", row.symbol, "coin " + priorityClass(row.priority));
-        coinCell.classList.add("coin");
+        appendText(tr, "td", row.symbol, "coin");
         appendText(tr, "td", row.price, "price");
         const idea = document.createElement("td");
         appendSignal(idea, row.idea);
@@ -308,12 +327,17 @@ export const marketCardHtml = String.raw`<!doctype html>
       candidatesWrap.hidden = !visible;
       if (!visible) return;
       const priorities = new Map(
-        (marketRows || []).map((row) => [row.symbol, priorityClass(row.priority)]),
+        (marketRows || []).map((row) => [row.symbol, row.priority]),
       );
-      rows.forEach((row) => {
+      const orderedRows = [...rows].sort((left, right) => {
+        const byPriority = priorityPosition(priorities.get(left.symbol))
+          - priorityPosition(priorities.get(right.symbol));
+        return byPriority || symbolPosition(left.symbol) - symbolPosition(right.symbol);
+      });
+      orderedRows.forEach((row) => {
         const tr = document.createElement("tr");
         const name = document.createElement("td");
-        name.className = "candidate-name " + (priorities.get(row.symbol) || "");
+        name.className = "candidate-name " + priorityClass(priorities.get(row.symbol));
         name.append(document.createTextNode(row.symbol + " "));
         appendSignal(name, row.direction);
         tr.appendChild(name);
@@ -326,9 +350,24 @@ export const marketCardHtml = String.raw`<!doctype html>
         );
         appendText(condition, "div", row.entry_condition);
         tr.appendChild(condition);
-        appendText(tr, "td", row.entry + " / " + row.stop_or_invalidation);
-        appendText(tr, "td", row.targets.join(" → "), "targets");
-        appendText(tr, "td", row.pnl_6x.join(" · "), "pnl");
+        const showTradePlan = row.entry_status === "confirmed";
+        appendText(
+          tr,
+          "td",
+          showTradePlan ? row.entry + " / " + row.stop_or_invalidation : "—",
+        );
+        appendText(
+          tr,
+          "td",
+          showTradePlan ? row.targets.join(" → ") : "—",
+          "targets",
+        );
+        appendText(
+          tr,
+          "td",
+          showTradePlan ? row.pnl_6x.join(" · ") : "—",
+          "pnl",
+        );
         candidateRowsNode.appendChild(tr);
       });
     }
