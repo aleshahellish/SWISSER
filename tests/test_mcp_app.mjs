@@ -94,12 +94,14 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
     clientInfo: { name: "swisser-test", version: "1.0.0" },
   });
   assert.equal(initialized.result.serverInfo.name, "swisser-market-controls");
-  assert.equal(initialized.result.serverInfo.version, "1.10.1");
+  assert.equal(initialized.result.serverInfo.version, "1.11.0");
   assert.match(initialized.result.instructions, /одним scan_swisser_markets/);
   assert.match(initialized.result.instructions, /короткий workflow_id/);
   assert.match(initialized.result.instructions, /Никогда не передавай evidence_token/);
   assert.match(initialized.result.instructions, /SWISSER_RESTART_REQUIRED/);
   assert.match(initialized.result.instructions, /частично восстановленная карточка запрещена/);
+  assert.match(initialized.result.instructions, /snapshot не получил состояние scanner/);
+  assert.match(initialized.result.instructions, /не повторяй из-за этого режим вручную/);
   assert.match(initialized.result.instructions, /Не выводи пользователю.*state_recovered/);
   assert.match(initialized.result.instructions, /одним get_swisser_candidate_snapshots/);
   assert.doesNotMatch(
@@ -136,6 +138,11 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
   assert.ok(snapshotProperties.mode);
   assert.ok(snapshotProperties.workflow_id);
   assert.ok(snapshotProperties.symbols);
+  assert.equal(
+    tools.result.tools[1].inputSchema.required.includes("workflow_id"),
+    false,
+  );
+  assert.equal(snapshotProperties.workflow_id.format, undefined);
   assert.equal(snapshotProperties.evidence_token, undefined);
   const rendererProperties = tools.result.tools[2].inputSchema.properties;
   assert.equal(rendererProperties.cut_time, undefined);
@@ -378,13 +385,16 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
     name: "get_swisser_candidate_snapshots",
     arguments: {
       mode: "setups",
-      workflow_id: "00000000-0000-4000-8000-000000000001",
       symbols: ["SOL_USDT", "HYPE_USDT"],
     },
   });
-  assert.equal(missingSetupsBundle.result.isError, true);
-  assert.match(missingSetupsBundle.result.content[0].text, /SWISSER_RESTART_REQUIRED/);
+  assert.notEqual(missingSetupsBundle.result.isError, true);
+  assert.match(missingSetupsBundle.result.content[0].text, /атомарно построен/);
+  assert.equal(missingSetupsBundle.result.structuredContent.snapshots.length, 2);
   assert.deepEqual(upstreamCalls, [
+    "/api/scanner_action_v6",
+    "/api/snapshot_action_v6",
+    "/api/snapshot_action_v6",
     "/api/scanner_action_v6",
     "/api/snapshot_action_v6",
     "/api/snapshot_action_v6",
@@ -441,12 +451,24 @@ test("SWISSER MCP exposes durable atomic workflow and compatible UI", async (t) 
     name: "get_swisser_candidate_snapshots",
     arguments: {
       mode: "entry",
-      workflow_id: "00000000-0000-4000-8000-000000000003",
+      workflow_id: "corrupted-id",
       symbols: ["SOL_USDT", "HYPE_USDT"],
     },
   });
-  assert.equal(missingEntryBundle.result.isError, true);
-  assert.match(missingEntryBundle.result.content[0].text, /SWISSER_RESTART_REQUIRED/);
+  assert.notEqual(missingEntryBundle.result.isError, true);
+  assert.match(missingEntryBundle.result.content[0].text, /атомарно построен/);
+  assert.equal(missingEntryBundle.result.structuredContent.snapshots.length, 2);
+
+  const recoveredEntryCard = await rpc(url, 151, "tools/call", {
+    name: "render_swisser_market_card",
+    arguments: {
+      ...cardInput,
+      mode: "entry",
+      workflow_id: missingEntryBundle.result.structuredContent.workflow_id,
+      market_rows: cardInput.market_rows.filter((row) => ["SOL", "HYPE"].includes(row.symbol)),
+    },
+  });
+  assert.equal(recoveredEntryCard.result.structuredContent.market_rows.length, 2);
 
   const missingEntryCard = await rpc(url, 16, "tools/call", {
     name: "render_swisser_market_card",
